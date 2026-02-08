@@ -1,0 +1,184 @@
+# 依赖目录
+node_modules/
+frontend/node_modules/
+
+# 构建输出
+frontend/dist/
+frontend/build/
+backend/crane-system
+
+# 环境配置文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 日志文件
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# 运行时数据
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# 覆盖率目录
+coverage/
+*.lcov
+
+# nyc 测试覆盖率
+.nyc_output
+
+# Grunt 中间和输出目录
+.grunt
+
+# Bower 依赖目录
+bower_components
+
+# node-waf 配置
+.lock-wscript
+
+# 编译的二进制插件
+build/Release
+
+# 依赖目录
+node_modules/
+jspm_packages/
+
+# TypeScript v1 声明文件
+typings/
+
+# TypeScript 缓存
+*.tsbuildinfo
+
+# 可选的 npm 缓存目录
+.npm
+
+# 可选的 eslint 缓存
+.eslintcache
+
+# Microbundle 缓存
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# 可选的 REPL 历史
+.node_repl_history
+
+# yarn v2 的输出
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+
+# Go 相关
+backend/*.exe
+backend/*.exe~
+backend/*.dll
+backend/*.so
+backend/*.dylib
+backend/crane-system
+backend/main
+
+# Go 测试二进制文件，由 `go test -c` 构建
+backend/*.test
+
+# Go 覆盖率输出
+backend/*.out
+
+# Go 依赖缓存
+backend/vendor/
+
+# Go 工作空间缓存
+go.work.sum
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统生成的文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# 上传文件目录
+uploads/*
+!uploads/.gitkeep
+
+# 备份文件目录
+backups/*
+!backups/.gitkeep
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 配置文件（包含敏感信息）
+config/*.local.js
+config/*.local.json
+
+# Docker 相关
+.dockerignore
+
+# 前端开发服务器
+.vite/
+
+# Storybook 构建输出
+storybook-static
+
+# Temporary folders
+tmp/
+temp/
+
+# 运行时文件
+*.pid
+*.seed
+*.pid.lock
+
+# 可选的历史文件
+.npm
+.eslintcache
+
+# 本地配置文件
+config.local.js
+config.local.json
+
+# 测试覆盖率
+coverage/
+
+# 生产构建
+dist/
+build/
+
+# 缓存文件
+.cache/
+.parcel-cache/
+
+# 环境变量文件
+.env*
+
+# 日志
+logs/
+*.log
