@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import {
   Table,
   Button,
@@ -11,90 +11,90 @@ import {
   Tag,
   Popconfirm,
   Drawer,
-} from 'antd'
-import { PlusOutlined, DeleteOutlined, EyeOutlined, CodeSandboxOutlined } from '@ant-design/icons'
-import api from '../services/api'
+} from 'antd';
+import { PlusOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
+import api from '../services/api';
 
-const { Title } = Typography
-const { TextArea } = Input
+const { Title } = Typography;
+const { TextArea } = Input;
 
 const VehicleModelManagement = () => {
-  const [vehicleModels, setVehicleModels] = useState([])
-  const [programs, setPrograms] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [modalVisible, setModalVisible] = useState(false)
-  const [drawerVisible, setDrawerVisible] = useState(false)
-  const [currentModel, setCurrentModel] = useState<any>(null)
-  const [form] = Form.useForm()
+  const [vehicleModels, setVehicleModels] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const [currentModel, setCurrentModel] = useState<any>(null);
+  const [form] = Form.useForm();
 
   useEffect(() => {
-    loadVehicleModels()
-  }, [])
+    loadVehicleModels();
+  }, []);
 
   const loadVehicleModels = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      const response = await api.get('/vehicle-models')
-      setVehicleModels(response.data)
+      const response = await api.get('/vehicle-models');
+      setVehicleModels(response.data);
     } catch (error) {
-      console.error('Failed to load vehicle models:', error)
+      console.error('Failed to load vehicle models:', error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleAdd = () => {
-    setCurrentModel(null)
-    form.resetFields()
-    setModalVisible(true)
-  }
+    setCurrentModel(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
 
   const handleEdit = (record: any) => {
-    setCurrentModel(record)
-    form.setFieldsValue(record)
-    setModalVisible(true)
-  }
+    setCurrentModel(record);
+    form.setFieldsValue(record);
+    setModalVisible(true);
+  };
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(`/vehicle-models/${id}`)
-      message.success('删除成功')
-      loadVehicleModels()
+      await api.delete(`/vehicle-models/${id}`);
+      message.success('删除成功');
+      loadVehicleModels();
     } catch (error) {
-      console.error('Failed to delete:', error)
+      console.error('Failed to delete:', error);
     }
-  }
+  };
 
   const handleSubmit = async (values: any) => {
     try {
       if (currentModel) {
-        await api.put(`/vehicle-models/${currentModel.id}`, values)
-        message.success('更新成功')
+        await api.put(`/vehicle-models/${currentModel.id}`, values);
+        message.success('更新成功');
       } else {
-        await api.post('/vehicle-models', values)
-        message.success('创建成功')
+        await api.post('/vehicle-models', values);
+        message.success('创建成功');
       }
-      setModalVisible(false)
-      loadVehicleModels()
+      setModalVisible(false);
+      loadVehicleModels();
     } catch (error) {
-      console.error('Failed to submit:', error)
+      console.error('Failed to submit:', error);
     }
-  }
+  };
 
   const handleViewPrograms = async (record: any) => {
-    setCurrentModel(record)
-    setLoading(true)
+    setCurrentModel(record);
+    setLoading(true);
     try {
-      const response = await api.get(`/programs/by-vehicle/${record.id}`)
-      setPrograms(response.data)
-      setDrawerVisible(true)
+      const response = await api.get(`/programs/by-vehicle/${record.id}`);
+      setPrograms(response.data);
+      setDrawerVisible(true);
     } catch (error) {
-      console.error('Failed to load programs:', error)
-      message.error('加载程序列表失败')
+      console.error('Failed to load programs:', error);
+      message.error('加载程序列表失败');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const columns = [
     {
@@ -127,27 +127,42 @@ const VehicleModelManagement = () => {
       key: 'action',
       render: (_: any, record: any) => (
         <Space>
-          <Button 
-            icon={<EyeOutlined />} 
-            size="small" 
+          <Button
+            icon={<EyeOutlined />}
+            size="small"
             onClick={() => handleViewPrograms(record)}
           >
             查看程序
           </Button>
-          <Button type="primary" size="small" onClick={() => handleEdit(record)}>
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => handleEdit(record)}
+          >
             编辑
           </Button>
-          <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)}>
-            <Button danger icon={<DeleteOutlined />} size="small">删除</Button>
+          <Popconfirm
+            title="确定删除?"
+            onConfirm={() => handleDelete(record.id)}
+          >
+            <Button danger icon={<DeleteOutlined />} size="small">
+              删除
+            </Button>
           </Popconfirm>
         </Space>
       ),
     },
-  ]
+  ];
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+        }}
+      >
         <Title level={2}>车型管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
           新建车型
@@ -214,7 +229,8 @@ const VehicleModelManagement = () => {
               title: '当前版本',
               dataIndex: 'version',
               key: 'version',
-              render: (version: string) => version ? <Tag color="blue">{version}</Tag> : '-',
+              render: (version: string) =>
+                version ? <Tag color="blue">{version}</Tag> : '-',
             },
             {
               title: '状态',
@@ -230,7 +246,7 @@ const VehicleModelManagement = () => {
         />
       </Drawer>
     </div>
-  )
-}
+  );
+};
 
-export default VehicleModelManagement
+export default VehicleModelManagement;
