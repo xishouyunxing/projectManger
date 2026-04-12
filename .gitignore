@@ -182,3 +182,12 @@ build/
 # 日志
 logs/
 *.log
+
+# 项目级工作目录和本地产物
+.worktrees/
+.planning/
+.agents/
+deploy/
+deploy.zip
+backend/backups/*.zip
+backups/*.zip
