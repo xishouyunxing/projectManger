@@ -32,6 +32,8 @@ func Connect() error {
 func migrationModels() []any {
 	return []any{
 		&models.Department{},
+		&models.Process{},
+		&models.VehicleModel{},
 		&models.User{},
 		&models.ProductionLine{},
 		&models.ProductionLineCustomField{},
@@ -42,8 +44,6 @@ func migrationModels() []any {
 		&models.ProgramRelation{},
 		&models.UserPermission{},
 		&models.DepartmentPermission{},
-		&models.VehicleModel{},
-		&models.Process{},
 	}
 }
 
@@ -53,7 +53,7 @@ func ensureTables() error {
 			continue
 		}
 
-		if err := DB.AutoMigrate(model); err != nil {
+		if err := DB.Migrator().CreateTable(model); err != nil {
 			return err
 		}
 	}

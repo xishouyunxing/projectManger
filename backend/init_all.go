@@ -28,16 +28,9 @@ func InitAll() {
 	createDepartments()
 	createAdmin()
 
-	// 2. 创建工序数据
-	createProcesses()
-
-	// 3. 创建车型数据
-	createVehicleModels()
-
-	// 4. 创建生产线数据
-	createProductionLines()
-
 	log.Println("🎉 系统数据初始化完成！")
+	log.Println("ℹ️ 已初始化：数据库结构、部门、管理员账号")
+	log.Println("ℹ️ 未初始化：工序、车型、生产线，请在系统中按业务需要手工录入")
 	log.Println("🔑 默认登录信息:")
 	log.Println("   工号: admin001")
 	log.Println("   密码: admin123456")

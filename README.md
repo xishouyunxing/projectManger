@@ -1,81 +1,64 @@
 # 🏗️ 离线编程程序管理系统
 
-适用于离线编程组生产线程序管理系统，提供完整的程序版本控制、用户权限管理、车型管理等功能。系统支持上车/下车结构管理，程序文件版本追踪，以及精细化的权限控制。
+适用于离线编程组生产线程序管理系统，提供程序版本管理、用户与部门权限管理、车型与生产线管理、文件备份恢复等功能。系统支持上车/下车结构管理、程序文件版本追踪，以及按生产线粒度的权限控制。
 
 ## 🚀 技术栈
 
 ### 后端技术栈
-- **Go 1.23** - 高性能后端语言
-- **Gin** - 轻量级Web框架
-- **GORM** - ORM数据库操作框架
-- **MySQL 8.0** - 关系型数据库
-- **JWT** - 基于Token的身份认证
-- **Gin-Cors** - 跨域请求处理
+- **Go 1.24**
+- **Gin**
+- **GORM**
+- **MySQL 8.0**
+- **JWT**
+- **Gin-Cors**
 
 ### 前端技术栈
-- **React 18** - 现代化UI框架
-- **TypeScript** - 类型安全的JavaScript
-- **Vite 5** - 快速构建工具
-- **Ant Design 5** - 企业级UI组件库
-- **React Router 6** - 客户端路由管理
-- **Axios** - HTTP请求客户端
-- **Day.js** - 轻量级日期处理库
+- **React 18**
+- **TypeScript**
+- **Vite 5**
+- **Ant Design 5**
+- **React Router 6**
+- **Axios**
+- **Day.js**
 
 ## 🎨 UI 框架说明
 
-本项目前端使用 **Ant Design 5** 作为主要 UI 组件库，提供企业级的用户体验：
-
-- **🎯 一致的设计语言** - 统一的视觉风格和交互模式
-- **📱 响应式设计** - 支持桌面端和移动端适配
-- **🌍 国际化支持** - 内置中文本地化
-- **♿ 无障碍访问** - 符合 WCAG 2.0 标准
-- **🎭 主题定制** - 支持品牌色彩和样式定制
-
+本项目前端使用 **Ant Design 5** 作为主要 UI 组件库，提供统一的设计语言、响应式布局、中文本地化支持和较完整的企业后台组件能力。
 
 ## 🎯 功能特性
 
 ### 🔧 程序管理
-- **完整的程序生命周期管理**
-  - 支持程序文件上传、版本控制和历史追踪
-  - 程序关联功能，支持同工位不同车型的程序复用
-  - 车型视图，按车型组织和管理相关程序
-  - 支持程序文件的预览、下载和批量操作
+- 程序基础信息维护
+- 程序文件上传、下载与版本追踪
+- 程序关联关系管理
+- 按车型查看程序
+- 支持批量导入、文件迁移与文件完整性治理
 
-### 🏗️ 生产线结构管理
-- **上车结构管理**
-  - 吊臂、转台等上车部分生产线程序管理
-- **下车结构管理** 
-  - 底盘、支腿等下车部分生产线程序管理
-- **灵活的权限关联机制**
-  - 将用户权限精确绑定到具体生产线
-  - 支持跨生产线的程序共享和关联
+### 🏗️ 生产线与车型管理
+- 上车 / 下车生产线管理
+- 工序与生产线关联
+- 车型信息维护
+- 生产线自定义字段模板配置
 
-### 👥 用户权限系统
-- **精细化的权限控制**
-  - 员工信息管理：工号、姓名、部门、角色
-  - 多级权限体系：查看、下载、上传、管理权限
-  - 部门分类管理，按组织架构进行权限分配
-- **安全管理**
-  - 员工密码自行修改，管理员可重置密码
-  - 基于JWT的身份认证机制
+### 👥 用户与权限系统
+- 用户、部门、角色管理
+- 用户级权限分配
+- 部门级权限分配
+- 管理员重置密码、用户自行修改密码
+- 基于 JWT 的认证机制
 
-### 📁 文件管理系统
-- **安全的文件存储**
-  - 支持多格式文件上传和下载
-  - 文件权限验证，确保数据安全
-  - 完整的文件版本历史记录
-- **备份与恢复**
-  - 数据库和文件系统的完整备份
-  - 支持一键恢复功能
+### 📁 文件与系统管理
+- 程序文件存储与版本记录
+- 文件忽略列表与完整性检查
+- 数据库 / 文件 / 全量备份与恢复
+- 长任务管理（如批量导入）
 
 ## 🚀 快速开始
 
+### 1. 数据库准备
 
-#### 1. 数据库配置
-
-**步骤一：创建数据库和用户**
 ```sql
--- 连接MySQL
+-- 连接 MySQL
 mysql -u root -p
 
 -- 创建数据库
@@ -87,23 +70,10 @@ GRANT ALL PRIVILEGES ON zlzk.* TO 'zlzk'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-**步骤二：运行数据库初始化**
-```bash
-# 方法1: 使用Go程序自动初始化（推荐）
-cd backend
-go run init_all.go
+### 2. 配置环境变量
 
-# 方法2: 手动创建管理员用户
-mysql -u zlzk -p zlzk
-```
+在项目根目录创建 `.env`：
 
-**步骤三：配置环境变量**
-```bash
-# 复制配置文件
-cp .env.example .env
-```
-
-编辑 `.env` 文件（位于项目根目录）：
 ```env
 # 数据库配置
 DB_HOST=127.0.0.1
@@ -112,221 +82,268 @@ DB_USER=zlzk
 DB_PASSWORD=zlzk.12345678
 DB_NAME=zlzk
 
-# JWT配置
-JWT_SECRET=crane-system-jwt-secret-key-2024
+# JWT 配置（必须至少 32 个字符）
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
 
-# 服务器配置
-SERVER_PORT=3000
-CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+# 服务配置
+SERVER_PORT=8080
+DEFAULT_PASSWORD=zlzk.12345678
+FRONTEND_DIST=../frontend/dist
 ```
 
-**数据表结构说明**：
-系统会自动创建以下数据表：
-- `users` - 用户信息表
-- `user_permissions` - 用户权限关联表
-- `processes` - 工序信息表
-- `production_lines` - 生产线信息表
-- `vehicle_models` - 车型信息表
-- `programs` - 程序信息表
-- `program_files` - 程序文件表
-- `program_versions` - 程序版本表
-- `program_relations` - 程序关联关系表
+说明：
+- 后端会优先从项目根目录加载 `.env`
+- `JWT_SECRET` 未配置或长度不足时，后端会直接启动失败
+- 前端开发服务器默认运行在 `http://localhost:3000`
+- 前端开发环境会将 `/api` 代理到 `http://localhost:8080`
 
-**手动创建管理员用户**：
-```sql
-INSERT INTO users (employee_id, employee_no, name, department, role, password, status, created_at, updated_at) 
-VALUES ('admin001', 'admin001', '系统管理员', '工艺研究所', 'admin', 
-        '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVEFDa', 
-        'active', NOW(), NOW());
-```
-
-#### 2. 启动后端服务
+### 3. 初始化系统数据
 
 ```bash
-# 进入后端目录
+# 在项目根目录执行
+go run ./init_all.go
+```
+
+初始化会自动创建：
+- 部门
+- 管理员账号
+- 车型基础数据
+- 生产线基础数据
+
+默认管理员账号：
+- 工号：`admin001`
+- 密码：`admin123456`
+
+### 4. 启动后端服务
+
+```bash
 cd backend
-
-# 安装依赖
-go mod tidy
-
-# 启动开发服务器
+go mod download
 go run main.go
 ```
 
-#### 3. 启动前端服务
+后端默认监听：`http://localhost:8080`
+
+### 5. 启动前端服务
 
 ```bash
-# 方法1: 使用便捷脚本（推荐）
-# 新开终端，直接在项目根目录执行
-fnpm install      # 安装依赖
-fnpm run dev      # 启动开发服务器
+# 方法 1：使用便捷脚本（推荐）
+fnpm install
+fnpm run dev
 
-# 方法2: 传统方式
-# 新开终端，进入前端目录
+# 方法 2：传统方式
 cd frontend
 npm install
 npm run dev
 ```
 
-成功启动后访问：http://localhost:3000
-
-### 🎯 登录系统
-
-- **访问地址**: http://localhost:3000
-- **管理员账号**: `admin001`
-- **默认密码**: `admin123456`
-
-> 💡 **提示**: 如果运行了 `go run init_all.go`，管理员账号会自动创建。如果没有，请使用上面的SQL手动创建。
+前端默认地址：`http://localhost:3000`
 
 ## 📁 项目结构
 
+```text
+projectManger/
+├── backend/        # Gin + GORM 后端服务
+├── frontend/       # React + Vite 前端应用
+├── backups/        # 备份文件目录
+├── uploads/        # 上传文件目录
+├── init_all.go     # 根目录初始化脚本
+├── Makefile        # 常用开发命令
+├── docker-compose.yml
+└── README.md
 ```
-crane-system/
-├── 🗂️ backend/                    # 后端Go服务
-│   ├── 📂 config/                # 配置管理
-│   │   └── config.go            # 应用配置
-│   ├── 📂 controllers/           # 业务控制器
-│   │   ├── auth.go              # 用户认证
-│   │   ├── user.go              # 用户管理
-│   │   ├── program.go           # 程序管理
-│   │   ├── backup.go            # 备份管理
-│   │   └── ...
-│   ├── 📂 database/              # 数据库层
-│   │   └── database.go          # 数据库连接
-│   ├── 📂 middleware/            # 中间件
-│   │   ├── auth.go              # 认证中间件
-│   │   ├── admin.go             # 管理员权限
-│   │   └── cors.go              # 跨域处理
-│   ├── 📂 models/                # 数据模型
-│   │   ├── user.go              # 用户模型
-│   │   ├── program.go           # 程序模型
-│   │   └── ...
-│   ├── 📂 router/                # 路由配置
-│   │   └── router.go            # 路由定义
-│   ├── 📂 utils/                 # 工具函数
-│   │   ├── file_utils.go        # 文件操作
-│   │   └── auth_utils.go        # 认证工具
-│   ├── 📂 uploads/               # 上传文件存储
-│   ├── 📄 main.go                # 应用入口
-│   ├── 📄 init_all.go           # 数据初始化脚本
-│   ├── 📄 go.mod                 # Go模块依赖
-│   └── 📄 Dockerfile             # Docker构建文件
-├── 🗂️ frontend/                   # React前端应用
-│   ├── 📂 public/                # 静态资源
-│   ├── 📂 src/
-│   │   ├── 📂 components/       # 可复用组件
-│   │   │   ├── Layout.tsx       # 主布局组件(Ant Design)
-│   │   │   └── ...
-│   │   ├── 📂 pages/            # 页面组件
-│   │   │   ├── Login.tsx        # 登录页面
-│   │   │   ├── Dashboard.tsx    # 仪表板
-│   │   │   ├── ProgramManagement.tsx # 程序管理
-│   │   │   ├── UserManagement.tsx    # 用户管理
-│   │   │   ├── VehicleModelManagement.tsx # 车型管理
-│   │   │   ├── ProductionLineManagement.tsx # 生产线管理
-│   │   │   ├── PermissionManagement.tsx # 权限管理
-│   │   │   └── SystemManagement.tsx # 系统管理
-│   │   ├── 📂 pages_disabled/   # Ant Design 页面备份
-│   │   │   └── ...
-│   │   ├── 📂 services/         # API服务
-│   │   │   ├── api.ts           # API客户端
-│   │   │   └── auth.ts          # 认证服务
-│   │   ├── 📂 contexts/         # React Context
-│   │   │   └── AuthContext.tsx  # 认证上下文
-│   │   ├── 📄 App.tsx            # 根组件
-│   │   └── 📄 main.tsx           # 应用入口
-│   ├── 📄 package.json          # 前端依赖
-│   └── 📄 vite.config.ts         # Vite配置
-├── 🗂️ backups/                    # 备份文件目录
-├── 🗂️ uploads/                    # 用户上传文件存储
-├── 📄 .env                        # 环境配置
-├── 📄 .env.example               # 环境配置示例
-├── 📄 docker-compose.yml         # Docker编排文件
-├── 📄 go.work                     # Go工作空间配置
-├── 📄 Makefile                    # 构建脚本
-├── 📄 fnpm.cmd                    # Windows前端npm便捷脚本
-├── 📄 fnpm.sh                     # Linux/Mac前端npm便捷脚本
-├── 📄 DEPLOYMENT.md               # 部署指南
-├── 📄 QUICK_START.md              # 快速启动指南
-└── 📄 README.md                   # 项目文档
-```
+
+结构说明：
+- `backend/main.go` 负责加载配置、连接数据库、自动迁移、初始化默认管理员、检查未完成任务并启动 Gin
+- `backend/router/router.go` 统一注册 `/api` 路由
+- `backend/models/` 定义核心数据模型与关联关系
+- `backend/task/` 提供长任务管理能力，用于批量导入等异步流程
+- `frontend/src/App.tsx` 定义应用路由与全局 Provider
+- `frontend/src/services/api.ts` 统一处理 API 请求、JWT 注入与 `401` 跳转
 
 ## 🗄️ 核心数据模型
 
 ### 主要实体
-```go
-// 用户系统
-- User              // 用户基础信息 (employee_id, name, department, role, password, status)
-- UserPermission    // 用户权限关联 (user_id, production_line_id, can_view, can_download, can_upload, can_manage)
 
-// 生产管理
-- Process           // 工序信息 (name, code, type, sort_order, description)
-- VehicleModel      // 车型信息 (name, code, series, description, status)
-- ProductionLine    // 生产线信息 (name, code, type, process_id, description, status)
+```text
+Department
+  部门信息
 
-// 程序管理
-- Program          // 程序基础信息 (name, code, production_line_id, vehicle_model_id, version, description, status)
-- ProgramFile      // 程序文件 (program_id, file_name, file_path, file_size, file_type, version, uploaded_by, description)
-- ProgramVersion   // 程序版本 (program_id, version, file_id, uploaded_by, change_log, is_current)
-- ProgramRelation  // 程序关联关系 (source_program_id, related_program_id, relation_type, description)
+User
+  用户基础信息（employee_id, employee_no, name, department_id, role, status）
+
+UserPermission
+  用户对生产线的权限（can_view, can_download, can_upload, can_manage）
+
+DepartmentPermission
+  部门对生产线的权限（can_view, can_download, can_upload, can_manage）
+
+Process
+  工序信息（name, code, type, sort_order）
+
+ProductionLine
+  生产线信息（name, code, type, process_id, status）
+
+ProductionLineCustomField
+  生产线自定义字段模板（name, field_type, options_json, sort_order, enabled）
+
+VehicleModel
+  车型信息（name, code, series, status）
+
+Program
+  程序主实体（name, code, production_line_id, vehicle_model_id, version, status, editing_by）
+
+ProgramFile
+  程序文件记录（file_name, file_path, file_size, file_type, version, uploaded_by）
+
+ProgramVersion
+  程序版本记录（program_id, version, file_id, uploaded_by, change_log, is_current）
+
+ProgramRelation
+  程序关联关系（source_program_id, related_program_id, relation_type）
+
+ProgramCustomFieldValue
+  程序在自定义字段上的取值
 ```
 
-### 数据表关系
-- `Process` ← `ProductionLine` (一对多)
-- `ProductionLine` ← `Program` (一对多)  
-- `VehicleModel` ← `Program` (一对多)
-- `User` ← `UserPermission` (一对多)
-- `ProductionLine` ← `UserPermission` (一对多)
-- `Program` ← `ProgramFile` (一对多)
-- `Program` ← `ProgramVersion` (一对多)
-- `Program` ← `ProgramRelation` (多对多自关联)
+### 关系概览
+- `Department` ← `User`（一对多）
+- `Process` ← `ProductionLine`（一对多）
+- `ProductionLine` ← `Program`（一对多）
+- `VehicleModel` ← `Program`（一对多）
+- `User` ← `UserPermission`（一对多）
+- `Department` ← `DepartmentPermission`（一对多）
+- `ProductionLine` ← `UserPermission` / `DepartmentPermission`（一对多）
+- `ProductionLine` ← `ProductionLineCustomField`（一对多）
+- `Program` ← `ProgramFile` / `ProgramVersion`（一对多）
+- `Program` ← `ProgramRelation`（程序自关联）
+- `Program` ← `ProgramCustomFieldValue`（一对多）
 
-## 🔒 安全机制
+## 🔒 认证与权限
 
-### 身份认证与授权
-- **JWT Token认证** - 基于环境变量的安全密钥
-- **bcrypt密码加密** - 安全的密码哈希存储
-- **精细化权限控制** - 基于角色的访问控制(RBAC)
-- **会话管理** - 可配置的Token过期时间
+- 所有受保护接口统一挂在 `/api` 下，并通过 JWT Bearer Token 认证
+- 管理员接口额外使用管理员中间件限制访问
+- 前端将 token 与用户信息保存在 `localStorage`
+- 前端包含 4 小时无交互自动登出机制
 
-### 数据安全
-- **SQL注入防护** - 使用GORM参数化查询
-- **XSS防护** - 前端输入验证和转义
-- **CORS配置** - 可配置的跨域访问策略
-- **文件安全** - 文件类型和路径验证
+## 🌐 API 示例
 
-## 🌐 API架构
-
-### RESTful设计原则
-- 所有API以 `/api` 为前缀
-- 统一的响应格式和错误处理
-- 标准HTTP状态码
-- 支持分页和筛选
-
-### 主要API端点
-```
-🔐 认证相关
-POST /api/auth/login          # 用户登录
-POST /api/auth/logout         # 用户登出
-GET  /api/auth/profile        # 获取用户信息
-
-👥 用户管理
-GET    /api/users            # 获取用户列表
-POST   /api/users            # 创建用户
-PUT    /api/users/:id        # 更新用户信息
-DELETE /api/users/:id        # 删除用户
-
-📋 程序管理
-GET    /api/programs         # 获取程序列表
-POST   /api/programs         # 创建程序
-PUT    /api/programs/:id     # 更新程序
-DELETE /api/programs/:id     # 删除程序
-POST   /api/programs/upload  # 上传程序文件
-
-🗃️ 备份管理
-POST   /api/backup/database  # 数据库备份
-POST   /api/backup/files     # 文件备份
-POST   /api/backup/full      # 完整备份
-GET    /api/backup           # 备份列表
+### 公开接口
+```text
+POST /api/login                 # 登录
+POST /api/register              # 注册
 ```
 
+### 用户与部门
+```text
+GET    /api/users
+GET    /api/users/:id
+POST   /api/users
+PUT    /api/users/:id
+DELETE /api/users/:id
+PUT    /api/users/:id/password
+PUT    /api/users/:id/reset-password
+
+GET    /api/departments
+GET    /api/departments/:id
+POST   /api/departments
+PUT    /api/departments/:id
+DELETE /api/departments/:id
+```
+
+### 工序、生产线、车型
+```text
+GET    /api/processes
+POST   /api/processes
+PUT    /api/processes/:id
+DELETE /api/processes/:id
+
+GET    /api/production-lines
+GET    /api/production-lines/:id
+GET    /api/production-lines/:id/custom-fields
+POST   /api/production-lines
+PUT    /api/production-lines/:id
+DELETE /api/production-lines/:id
+POST   /api/production-lines/:id/custom-fields
+PUT    /api/production-lines/:id/custom-fields/:fieldId
+DELETE /api/production-lines/:id/custom-fields/:fieldId
+
+GET    /api/vehicle-models
+POST   /api/vehicle-models
+PUT    /api/vehicle-models/:id
+DELETE /api/vehicle-models/:id
+```
+
+### 程序、文件、版本、关联
+```text
+GET    /api/programs
+GET    /api/programs/:id
+POST   /api/programs
+PUT    /api/programs/:id
+PUT    /api/programs/:id/custom-field-values
+DELETE /api/programs/:id
+GET    /api/programs/by-vehicle/:vehicle_id
+
+POST   /api/files/upload
+GET    /api/files/program/:program_id
+GET    /api/files/download/:id
+GET    /api/files/download/program/:program_id/latest
+GET    /api/files/download/version/:version
+DELETE /api/files/:id
+
+GET    /api/versions/program/:program_id
+POST   /api/versions
+PUT    /api/versions/:id/activate
+
+GET    /api/relations/program/:program_id
+POST   /api/relations
+DELETE /api/relations/:id
+```
+
+### 权限、备份、迁移、任务
+```text
+GET    /api/permissions
+POST   /api/permissions
+PUT    /api/permissions/:id
+DELETE /api/permissions/:id
+GET    /api/permissions/user/:user_id
+GET    /api/permissions/user/:user_id/effective
+
+GET    /api/department-permissions
+POST   /api/department-permissions
+PUT    /api/department-permissions/:id
+DELETE /api/department-permissions/:id
+
+POST   /api/backup/database
+POST   /api/backup/files
+POST   /api/backup/full
+GET    /api/backup
+GET    /api/backup/download/:name
+DELETE /api/backup/:name
+POST   /api/backup/restore/database/:name
+POST   /api/backup/restore/files/:name
+
+GET    /api/migration/status
+POST   /api/migration/start
+POST   /api/migration/rollback
+```
+
+## 🧪 开发命令
+
+```bash
+make install          # 安装依赖
+make dev              # 查看开发启动提示
+make build            # 构建前后端
+make test             # 运行全部测试
+make lint             # 运行全部 lint
+
+cd backend && go test ./... -v -cover
+cd frontend && npm test -- --run
+cd frontend && npm run lint
+```
+
+## 📌 说明
+
+- 当前仓库的初始化脚本入口位于根目录 `init_all.go`
+- 后端在存在 `frontend/dist` 时可直接托管已构建的前端静态资源
+- README 仅展示当前代码中可确认的主路径；更完整的调用细节请以 `backend/router/router.go` 和前端页面实现为准
