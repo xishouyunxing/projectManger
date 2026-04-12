@@ -1,8 +1,8 @@
-import { useTheme } from '../contexts/ThemeContext'
+import { useTheme } from '../contexts/ThemeContext';
 
 const PlaceholderPage = ({ title }: { title: string }) => {
-  const { theme } = useTheme()
-  
+  const { theme } = useTheme();
+
   return (
     <div className="min-h-screen bg-base-200 p-8">
       <div className="max-w-4xl mx-auto">
@@ -19,7 +19,7 @@ const PlaceholderPage = ({ title }: { title: string }) => {
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default PlaceholderPage
+export default PlaceholderPage;

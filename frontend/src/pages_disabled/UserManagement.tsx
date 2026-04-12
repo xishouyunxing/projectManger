@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import {
   Table,
   Button,
@@ -11,83 +11,83 @@ import {
   Typography,
   Tag,
   Popconfirm,
-} from 'antd'
-import { PlusOutlined, DeleteOutlined, LockOutlined } from '@ant-design/icons'
-import api from '../services/api'
-import { useAuth } from '../contexts/AuthContext'
+} from 'antd';
+import { PlusOutlined, DeleteOutlined, LockOutlined } from '@ant-design/icons';
+import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
-const { Title } = Typography
+const { Title } = Typography;
 
 const UserManagement = () => {
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [modalVisible, setModalVisible] = useState(false)
-  const [currentUser, setCurrentUser] = useState<any>(null)
-  const [form] = Form.useForm()
-  const { isAdmin } = useAuth()
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [form] = Form.useForm();
+  const { isAdmin } = useAuth();
 
   useEffect(() => {
-    loadUsers()
-  }, [])
+    loadUsers();
+  }, []);
 
   const loadUsers = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      const response = await api.get('/users')
-      setUsers(response.data)
+      const response = await api.get('/users');
+      setUsers(response.data);
     } catch (error) {
-      console.error('Failed to load users:', error)
+      console.error('Failed to load users:', error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleAdd = () => {
-    setCurrentUser(null)
-    form.resetFields()
-    setModalVisible(true)
-  }
+    setCurrentUser(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
 
   const handleEdit = (record: any) => {
-    setCurrentUser(record)
-    form.setFieldsValue(record)
-    setModalVisible(true)
-  }
+    setCurrentUser(record);
+    form.setFieldsValue(record);
+    setModalVisible(true);
+  };
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(`/users/${id}`)
-      message.success('删除成功')
-      loadUsers()
+      await api.delete(`/users/${id}`);
+      message.success('删除成功');
+      loadUsers();
     } catch (error) {
-      console.error('Failed to delete:', error)
+      console.error('Failed to delete:', error);
     }
-  }
+  };
 
   const handleResetPassword = async (id: number) => {
     try {
-      await api.put(`/users/${id}/reset-password`)
-      message.success('密码已重置为: 123456')
+      await api.put(`/users/${id}/reset-password`);
+      message.success('密码已重置为: 123456');
     } catch (error) {
-      console.error('Failed to reset password:', error)
+      console.error('Failed to reset password:', error);
     }
-  }
+  };
 
   const handleSubmit = async (values: any) => {
     try {
       if (currentUser) {
-        await api.put(`/users/${currentUser.id}`, values)
-        message.success('更新成功')
+        await api.put(`/users/${currentUser.id}`, values);
+        message.success('更新成功');
       } else {
-        await api.post('/users', values)
-        message.success('创建成功')
+        await api.post('/users', values);
+        message.success('创建成功');
       }
-      setModalVisible(false)
-      loadUsers()
+      setModalVisible(false);
+      loadUsers();
     } catch (error) {
-      console.error('Failed to submit:', error)
+      console.error('Failed to submit:', error);
     }
-  }
+  };
 
   const columns = [
     {
@@ -132,25 +132,45 @@ const UserManagement = () => {
         <Space>
           {isAdmin && (
             <>
-              <Button type="primary" size="small" onClick={() => handleEdit(record)}>
+              <Button
+                type="primary"
+                size="small"
+                onClick={() => handleEdit(record)}
+              >
                 编辑
               </Button>
-              <Popconfirm title="确定重置密码?" onConfirm={() => handleResetPassword(record.id)}>
-                <Button icon={<LockOutlined />} size="small">重置密码</Button>
+              <Popconfirm
+                title="确定重置密码?"
+                onConfirm={() => handleResetPassword(record.id)}
+              >
+                <Button icon={<LockOutlined />} size="small">
+                  重置密码
+                </Button>
               </Popconfirm>
-              <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)}>
-                <Button danger icon={<DeleteOutlined />} size="small">删除</Button>
+              <Popconfirm
+                title="确定删除?"
+                onConfirm={() => handleDelete(record.id)}
+              >
+                <Button danger icon={<DeleteOutlined />} size="small">
+                  删除
+                </Button>
               </Popconfirm>
             </>
           )}
         </Space>
       ),
     },
-  ]
+  ];
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+        }}
+      >
         <Title level={2}>用户管理</Title>
         {isAdmin && (
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
@@ -172,7 +192,11 @@ const UserManagement = () => {
         onOk={() => form.submit()}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Form.Item name="employee_id" label="工号" rules={[{ required: true }]}>
+          <Form.Item
+            name="employee_id"
+            label="工号"
+            rules={[{ required: true }]}
+          >
             <Input disabled={!!currentUser} />
           </Form.Item>
           <Form.Item name="name" label="姓名" rules={[{ required: true }]}>
@@ -188,7 +212,11 @@ const UserManagement = () => {
             </Select>
           </Form.Item>
           {!currentUser && (
-            <Form.Item name="password" label="密码" rules={[{ required: true }]}>
+            <Form.Item
+              name="password"
+              label="密码"
+              rules={[{ required: true }]}
+            >
               <Input.Password />
             </Form.Item>
           )}
@@ -201,7 +229,7 @@ const UserManagement = () => {
         </Form>
       </Modal>
     </div>
-  )
-}
+  );
+};
 
-export default UserManagement
+export default UserManagement;

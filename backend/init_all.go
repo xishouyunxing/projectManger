@@ -25,6 +25,7 @@ func InitAll() {
 	}
 
 	// 1. 创建管理员账号
+	createDepartments()
 	createAdmin()
 
 	// 2. 创建工序数据
@@ -43,6 +44,12 @@ func InitAll() {
 }
 
 func createAdmin() {
+	var adminDepartment models.Department
+	if err := database.DB.Where("name = ?", "IT部门").First(&adminDepartment).Error; err != nil {
+		log.Printf("❌ 查询管理员部门失败: %v", err)
+		return
+	}
+
 	// 生成管理员密码的哈希值
 	password := "admin123456"
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -53,19 +60,19 @@ func createAdmin() {
 
 	// 创建管理员用户
 	admin := models.User{
-		EmployeeID: "admin001",
-		EmployeeNo: "admin001",
-		Name:       "系统管理员",
-		Department: "IT部门",
-		Role:       "admin",
-		Password:   string(hashedPassword),
-		Status:     "active",
+		EmployeeID:   "admin001",
+		EmployeeNo:   "admin001",
+		Name:         "系统管理员",
+		DepartmentID: &adminDepartment.ID,
+		Role:         "admin",
+		Password:     string(hashedPassword),
+		Status:       "active",
 	}
 
 	// 检查是否已存在
 	var existingUser models.User
 	result := database.DB.Where("employee_id = ?", admin.EmployeeID).First(&existingUser)
-	
+
 	if result.Error == nil {
 		log.Printf("✅ 管理员账号已存在")
 		return
@@ -78,6 +85,23 @@ func createAdmin() {
 	}
 
 	log.Printf("✅ 创建管理员账号")
+}
+
+func createDepartments() {
+	departments := []models.Department{
+		{Name: "IT部门", Description: "系统管理与平台维护", Status: "active"},
+		{Name: "制造部", Description: "制造生产与执行管理", Status: "active"},
+		{Name: "质量部", Description: "质量控制与检验管理", Status: "active"},
+	}
+
+	for _, department := range departments {
+		var existing models.Department
+		if database.DB.Where("name = ?", department.Name).First(&existing).Error == nil {
+			continue
+		}
+		database.DB.Create(&department)
+	}
+	log.Printf("✅ 创建部门数据")
 }
 
 func createProcesses() {

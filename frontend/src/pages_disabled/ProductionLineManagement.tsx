@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import {
   Table,
   Button,
@@ -11,78 +11,73 @@ import {
   Typography,
   Tag,
   Popconfirm,
-} from 'antd'
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
-import api from '../services/api'
+} from 'antd';
+import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import api from '../services/api';
 
-const { Title } = Typography
-const { TextArea } = Input
+const { Title } = Typography;
+const { TextArea } = Input;
 
 const ProductionLineManagement = () => {
-  const [productionLines, setProductionLines] = useState([])
-  const [processes, setProcesses] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [modalVisible, setModalVisible] = useState(false)
-  const [currentLine, setCurrentLine] = useState<any>(null)
-  const [form] = Form.useForm()
+  const [productionLines, setProductionLines] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [currentLine, setCurrentLine] = useState<any>(null);
+  const [form] = Form.useForm();
 
   useEffect(() => {
-    loadData()
-  }, [])
+    loadData();
+  }, []);
 
   const loadData = async () => {
-    setLoading(true)
+    setLoading(true);
     try {
-      const [linesRes, processesRes] = await Promise.all([
-        api.get('/production-lines'),
-        api.get('/processes'),
-      ])
-      setProductionLines(linesRes.data)
-      setProcesses(processesRes.data)
+      const linesRes = await api.get('/production-lines');
+      setProductionLines(linesRes.data);
     } catch (error) {
-      console.error('Failed to load data:', error)
+      console.error('Failed to load data:', error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleAdd = () => {
-    setCurrentLine(null)
-    form.resetFields()
-    setModalVisible(true)
-  }
+    setCurrentLine(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
 
   const handleEdit = (record: any) => {
-    setCurrentLine(record)
-    form.setFieldsValue(record)
-    setModalVisible(true)
-  }
+    setCurrentLine(record);
+    form.setFieldsValue(record);
+    setModalVisible(true);
+  };
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(`/production-lines/${id}`)
-      message.success('删除成功')
-      loadData()
+      await api.delete(`/production-lines/${id}`);
+      message.success('删除成功');
+      loadData();
     } catch (error) {
-      console.error('Failed to delete:', error)
+      console.error('Failed to delete:', error);
     }
-  }
+  };
 
   const handleSubmit = async (values: any) => {
     try {
       if (currentLine) {
-        await api.put(`/production-lines/${currentLine.id}`, values)
-        message.success('更新成功')
+        await api.put(`/production-lines/${currentLine.id}`, values);
+        message.success('更新成功');
       } else {
-        await api.post('/production-lines', values)
-        message.success('创建成功')
+        await api.post('/production-lines', values);
+        message.success('创建成功');
       }
-      setModalVisible(false)
-      loadData()
+      setModalVisible(false);
+      loadData();
     } catch (error) {
-      console.error('Failed to submit:', error)
+      console.error('Failed to submit:', error);
     }
-  }
+  };
 
   const columns = [
     {
@@ -106,11 +101,6 @@ const ProductionLineManagement = () => {
       ),
     },
     {
-      title: '所属工序',
-      dataIndex: ['process', 'name'],
-      key: 'process',
-    },
-    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
@@ -125,20 +115,35 @@ const ProductionLineManagement = () => {
       key: 'action',
       render: (_: any, record: any) => (
         <Space>
-          <Button type="primary" size="small" onClick={() => handleEdit(record)}>
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => handleEdit(record)}
+          >
             编辑
           </Button>
-          <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)}>
-            <Button danger icon={<DeleteOutlined />} size="small">删除</Button>
+          <Popconfirm
+            title="确定删除?"
+            onConfirm={() => handleDelete(record.id)}
+          >
+            <Button danger icon={<DeleteOutlined />} size="small">
+              删除
+            </Button>
           </Popconfirm>
         </Space>
       ),
     },
-  ]
+  ];
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+        }}
+      >
         <Title level={2}>生产线管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
           新建生产线
@@ -158,25 +163,24 @@ const ProductionLineManagement = () => {
         onOk={() => form.submit()}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Form.Item name="name" label="生产线名称" rules={[{ required: true }]}>
+          <Form.Item
+            name="name"
+            label="生产线名称"
+            rules={[{ required: true }]}
+          >
             <Input />
           </Form.Item>
-          <Form.Item name="code" label="生产线编号" rules={[{ required: true }]}>
+          <Form.Item
+            name="code"
+            label="生产线编号"
+            rules={[{ required: true }]}
+          >
             <Input />
           </Form.Item>
           <Form.Item name="type" label="类型" rules={[{ required: true }]}>
             <Select>
               <Select.Option value="upper">上车</Select.Option>
               <Select.Option value="lower">下车</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="process_id" label="所属工序">
-            <Select allowClear>
-              {processes.map((process: any) => (
-                <Select.Option key={process.id} value={process.id}>
-                  {process.name}
-                </Select.Option>
-              ))}
             </Select>
           </Form.Item>
           <Form.Item name="description" label="描述">
@@ -191,7 +195,7 @@ const ProductionLineManagement = () => {
         </Form>
       </Modal>
     </div>
-  )
-}
+  );
+};
 
-export default ProductionLineManagement
+export default ProductionLineManagement;

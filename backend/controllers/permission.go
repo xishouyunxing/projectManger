@@ -10,7 +10,7 @@ import (
 
 func GetPermissions(c *gin.Context) {
 	var permissions []models.UserPermission
-	query := database.DB.Preload("User").Preload("ProductionLine")
+	query := database.DB.Preload("User").Preload("User.Department").Preload("ProductionLine")
 
 	if userID := c.Query("user_id"); userID != "" {
 		query = query.Where("user_id = ?", userID)

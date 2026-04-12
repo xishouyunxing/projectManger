@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import {
   Table,
   Button,
@@ -11,155 +11,389 @@ import {
   Tag,
   Popconfirm,
   Drawer,
-} from 'antd'
-import { PlusOutlined, DeleteOutlined, EyeOutlined, CodeSandboxOutlined } from '@ant-design/icons'
-import api from '../services/api'
+  Select,
+  Collapse,
+  Badge,
+  Empty,
+  DatePicker,
+  ConfigProvider,
+  Tooltip,
+} from 'antd';
+import { PlusOutlined, DeleteOutlined, EyeOutlined, CarOutlined, ApartmentOutlined, SearchOutlined, EditOutlined, AppstoreOutlined } from '@ant-design/icons';
+import api from '../services/api';
 
-const { Title } = Typography
-const { TextArea } = Input
+const { Title, Text } = Typography;
+const { TextArea } = Input;
 
 const VehicleModelManagement = () => {
-  const [vehicleModels, setVehicleModels] = useState([])
-  const [programs, setPrograms] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [modalVisible, setModalVisible] = useState(false)
-  const [drawerVisible, setDrawerVisible] = useState(false)
-  const [currentModel, setCurrentModel] = useState<any>(null)
-  const [form] = Form.useForm()
+  const [vehicleModels, setVehicleModels] = useState([]);
+  const [productionLines, setProductionLines] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const [programDetailVisible, setProgramDetailVisible] = useState(false);
+  const [currentModel, setCurrentModel] = useState<any>(null);
+  const [currentProgram, setCurrentProgram] = useState<any>(null);
+  const [programVersions, setProgramVersions] = useState<any[]>([]);
+  const [sharedPrograms, setSharedPrograms] = useState<any[]>([]);
+  const [form] = Form.useForm();
+
+  // 筛选相关状态
+  const [filterSeries, setFilterSeries] = useState<string | null>(null);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [filterDateRange, setFilterDateRange] = useState<[string | null, string | null]>([null, null]);
+
+  // 获取所有系列（去重）
+  const allSeries = [...new Set(vehicleModels.map((m: any) => m.series).filter(Boolean))];
+
+  // 筛选后的车型列表
+  const filteredVehicleModels = vehicleModels.filter((model: any) => {
+    // 关键词搜索（模糊匹配名称和编号）
+    if (searchKeyword) {
+      const keyword = searchKeyword.toLowerCase();
+      const nameMatch = model.name?.toLowerCase().includes(keyword);
+      const codeMatch = model.code?.toLowerCase().includes(keyword);
+      if (!nameMatch && !codeMatch) {
+        return false;
+      }
+    }
+    if (filterSeries && model.series !== filterSeries) {
+      return false;
+    }
+    // 时间筛选
+    if (filterDateRange[0] || filterDateRange[1]) {
+      const modelDate = new Date(model.created_at);
+      if (filterDateRange[0]) {
+        const startDate = new Date(filterDateRange[0]);
+        startDate.setHours(0, 0, 0, 0);
+        if (modelDate < startDate) return false;
+      }
+      if (filterDateRange[1]) {
+        const endDate = new Date(filterDateRange[1]);
+        endDate.setHours(23, 59, 59, 999);
+        if (modelDate > endDate) return false;
+      }
+    }
+    return true;
+  });
+
+  // 重置筛选
+  const handleResetFilter = () => {
+    setFilterSeries(null);
+    setSearchKeyword('');
+    setFilterDateRange([null, null]);
+  };
 
   useEffect(() => {
-    loadVehicleModels()
-  }, [])
+    loadData();
+  }, []);
 
-  const loadVehicleModels = async () => {
-    setLoading(true)
+  const loadData = async () => {
+    setLoading(true);
     try {
-      const response = await api.get('/vehicle-models')
-      setVehicleModels(response.data)
+      const [modelsRes, linesRes] = await Promise.all([
+        api.get('/vehicle-models'),
+        api.get('/production-lines'),
+      ]);
+      setVehicleModels(modelsRes.data);
+      setProductionLines(linesRes.data);
     } catch (error) {
-      console.error('Failed to load vehicle models:', error)
+      console.error('Failed to load data:', error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleAdd = () => {
-    setCurrentModel(null)
-    form.resetFields()
-    setModalVisible(true)
-  }
+    setCurrentModel(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
 
   const handleEdit = (record: any) => {
-    setCurrentModel(record)
-    form.setFieldsValue(record)
-    setModalVisible(true)
-  }
+    setCurrentModel(record);
+    form.setFieldsValue(record);
+    setModalVisible(true);
+  };
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(`/vehicle-models/${id}`)
-      message.success('删除成功')
-      loadVehicleModels()
+      await api.delete(`/vehicle-models/${id}`);
+      message.success('删除成功');
+      loadData();
     } catch (error) {
-      console.error('Failed to delete:', error)
+      console.error('Failed to delete:', error);
     }
-  }
+  };
 
   const handleSubmit = async (values: any) => {
     try {
       if (currentModel) {
-        await api.put(`/vehicle-models/${currentModel.id}`, values)
-        message.success('更新成功')
+        await api.put(`/vehicle-models/${currentModel.id}`, values);
+        message.success('更新成功');
       } else {
-        await api.post('/vehicle-models', values)
-        message.success('创建成功')
+        await api.post('/vehicle-models', values);
+        message.success('创建成功');
       }
-      setModalVisible(false)
-      loadVehicleModels()
+      setModalVisible(false);
+      loadData();
     } catch (error) {
-      console.error('Failed to submit:', error)
+      console.error('Failed to submit:', error);
     }
-  }
+  };
 
   const handleViewPrograms = async (record: any) => {
-    setCurrentModel(record)
-    setLoading(true)
+    setCurrentModel(record);
+    setLoading(true);
     try {
-      const response = await api.get(`/programs/by-vehicle/${record.id}`)
-      setPrograms(response.data)
-      setDrawerVisible(true)
+      const response = await api.get(`/programs/by-vehicle/${record.id}`);
+      setPrograms(response.data);
+      setDrawerVisible(true);
     } catch (error) {
-      console.error('Failed to load programs:', error)
-      message.error('加载程序列表失败')
+      console.error('Failed to load programs:', error);
+      message.error('加载程序列表失败');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
+
+  const handleViewProgramDetail = async (program: any) => {
+    setCurrentProgram(program);
+    setLoading(true);
+    try {
+      const [versionsRes, sharedRes] = await Promise.all([
+        api.get(`/files/program/${program.id}`),
+        api.get(`/relations/shared/${program.id}`),
+      ]);
+      setProgramVersions(versionsRes.data?.versions || []);
+      setSharedPrograms(sharedRes.data || []);
+      setProgramDetailVisible(true);
+    } catch (error) {
+      console.error('Failed to load program detail:', error);
+      message.error('加载程序详情失败');
+      setProgramVersions([]);
+      setSharedPrograms([]);
+      setProgramDetailVisible(true);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const columns = [
     {
       title: '车型名称',
       dataIndex: 'name',
       key: 'name',
+      render: (text: string) => (
+        <span style={{ color: '#2D3335', fontSize: '14px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
+          {text}
+        </span>
+      ),
     },
     {
       title: '车型编号',
       dataIndex: 'code',
       key: 'code',
+      render: (text: string) => (
+        <span style={{ color: '#5A6062', fontSize: '14px', fontWeight: 500, fontFamily: 'Inter, sans-serif' }}>
+          {text}
+        </span>
+      ),
     },
     {
       title: '系列',
       dataIndex: 'series',
       key: 'series',
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: string) => (
-        <Tag color={status === 'active' ? 'green' : 'red'}>
-          {status === 'active' ? '活跃' : '停用'}
-        </Tag>
+      render: (text: string) => (
+        <div style={{ background: '#EBEEF0', borderRadius: '4px', display: 'inline-block', padding: '2px 8px' }}>
+          <span style={{ color: '#2D3335', fontSize: '12px', fontWeight: 700, letterSpacing: '0.6px' }}>
+            {text || '-'}
+          </span>
+        </div>
       ),
     },
     {
       title: '操作',
       key: 'action',
+      align: 'right' as const,
       render: (_: any, record: any) => (
-        <Space>
-          <Button 
-            icon={<EyeOutlined />} 
-            size="small" 
-            onClick={() => handleViewPrograms(record)}
+        <Space size="small">
+          <Tooltip title="查看程序">
+            <Button
+              type="text"
+              icon={<EyeOutlined style={{ color: '#5A6062' }} />}
+              onClick={() => handleViewPrograms(record)}
+              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+            />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button
+              type="text"
+              icon={<EditOutlined style={{ color: '#5A6062' }} />}
+              onClick={() => handleEdit(record)}
+              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="确定删除?"
+            onConfirm={() => handleDelete(record.id)}
           >
-            查看程序
-          </Button>
-          <Button type="primary" size="small" onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)}>
-            <Button danger icon={<DeleteOutlined />} size="small">删除</Button>
+            <Tooltip title="删除">
+              <Button 
+                type="text"
+                icon={<DeleteOutlined style={{ color: '#A83836' }} />} 
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }} 
+              />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
     },
-  ]
+  ];
 
   return (
-    <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Title level={2}>车型管理</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-          新建车型
-        </Button>
+    <div className="management-page">
+      {/* 顶部标题区 */}
+      <div className="management-page-header">
+        <div>
+          <div className="management-page-breadcrumb">
+            <span>基础数据</span>
+            <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>/</span>
+            <span className="active">车型管理</span>
+          </div>
+          <Title level={2} className="management-page-title">
+            车型管理
+          </Title>
+        </div>
+        <Space>
+          <Button 
+            type="primary" 
+            icon={<PlusOutlined />} 
+            onClick={handleAdd}
+            style={{
+              background: 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)',
+              border: 'none',
+              boxShadow: '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)',
+              borderRadius: '8px',
+              height: '44px',
+              padding: '0 24px',
+              fontWeight: 600,
+              fontSize: '16px'
+            }}
+          >
+            新建车型
+          </Button>
+        </Space>
       </div>
-      <Table
-        columns={columns}
-        dataSource={vehicleModels}
-        rowKey="id"
-        loading={loading}
-      />
 
+      {/* 筛选区域 */}
+      <ConfigProvider
+        theme={{
+          components: {
+            Input: {
+              controlHeight: 36,
+              borderRadius: 8,
+              colorBorder: 'transparent',
+              colorPrimaryHover: 'transparent',
+              controlOutline: 'none',
+            },
+            Select: {
+              controlHeight: 36,
+              borderRadius: 8,
+              colorBorder: 'transparent',
+              colorPrimaryHover: 'transparent',
+              controlOutline: 'none',
+            },
+            DatePicker: {
+              controlHeight: 36,
+              borderRadius: 8,
+              colorBorder: 'transparent',
+              colorPrimaryHover: 'transparent',
+              controlOutline: 'none',
+            }
+          }
+        }}
+      >
+        <div className="management-filter-panel">
+          <div className="management-filter-field flex">
+            <div className="management-filter-label">车型名称/编号</div>
+            <Input 
+              placeholder="搜索参数..." 
+              value={searchKeyword} 
+              onChange={(e) => setSearchKeyword(e.target.value)}
+            />
+          </div>
+          <div className="management-filter-field">
+            <div className="management-filter-label">系列</div>
+            <Select 
+              placeholder="全部" 
+              value={filterSeries} 
+              onChange={setFilterSeries}
+              allowClear
+              style={{ width: '100%' }}
+            >
+              {allSeries.map((series) => (
+                <Select.Option key={series} value={series}>
+                  {series}
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+          <div className="management-filter-field">
+            <div className="management-filter-label">创建日期</div>
+            <DatePicker.RangePicker 
+              style={{ width: '100%' }}
+              onChange={(_, dateStrings) => {
+                setFilterDateRange([dateStrings[0] || null, dateStrings[1] || null]);
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Button 
+              onClick={() => {}}
+              icon={<SearchOutlined />}
+              style={{ height: '40px', width: '115px', borderRadius: '8px', background: '#DEE3E6', color: '#2D3335', fontWeight: 700, border: 'none' }}
+            >
+              查询
+            </Button>
+            <Button 
+              type="text"
+              onClick={handleResetFilter} 
+              style={{ height: '40px', color: '#005BC1', fontWeight: 700, letterSpacing: '1.2px', border: 'none', background: 'transparent' }}
+            >
+              重置
+            </Button>
+          </div>
+        </div>
+      </ConfigProvider>
+
+      <div className="management-table-card">
+        <Table
+          className="custom-table"
+          columns={columns}
+          dataSource={filteredVehicleModels}
+          rowKey="id"
+          loading={loading}
+          pagination={{
+            showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
+            style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
+          }}
+          locale={{
+            emptyText: (
+              <div style={{ padding: '40px 0' }}>
+                <CarOutlined style={{ fontSize: '48px', color: '#d9d9d9', marginBottom: '16px' }} />
+                <div style={{ color: '#999', marginBottom: '16px' }}>
+                  暂无车型数据
+                </div>
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+                  创建第一个车型
+                </Button>
+              </div>
+            ),
+          }}
+        />
+      </div>
       <Modal
         title={currentModel ? '编辑车型' : '新建车型'}
         open={modalVisible}
@@ -183,54 +417,270 @@ const VehicleModelManagement = () => {
       </Modal>
 
       <Drawer
-        title={`${currentModel?.name} - 程序列表`}
+        title={
+          <Space>
+            <CarOutlined />
+            <span>{currentModel?.name} - 程序列表</span>
+          </Space>
+        }
         placement="right"
         onClose={() => setDrawerVisible(false)}
         open={drawerVisible}
-        width={800}
+        width={900}
       >
-        <Table
-          dataSource={programs}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          columns={[
-            {
-              title: '程序名称',
-              dataIndex: 'name',
-              key: 'name',
-            },
-            {
-              title: '程序编号',
-              dataIndex: 'code',
-              key: 'code',
-            },
-            {
-              title: '生产线',
-              dataIndex: ['production_line', 'name'],
-              key: 'production_line',
-            },
-            {
-              title: '当前版本',
-              dataIndex: 'version',
-              key: 'version',
-              render: (version: string) => version ? <Tag color="blue">{version}</Tag> : '-',
-            },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              key: 'status',
-              render: (status: string) => (
-                <Tag color={status === 'active' ? 'green' : 'red'}>
-                  {status === 'active' ? '活跃' : '停用'}
-                </Tag>
-              ),
-            },
-          ]}
-        />
+        {programs.length === 0 ? (
+          <Empty
+            description="暂无程序数据"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        ) : (
+          <Collapse
+            defaultActiveKey={productionLines.map((line: any) => line.id)}
+            items={productionLines
+              .filter((line: any) => {
+                // 只显示有程序的生产线
+                return programs.some((p: any) => p.production_line_id === line.id);
+              })
+              .map((line: any) => {
+                const linePrograms = programs.filter(
+                  (p: any) => p.production_line_id === line.id
+                );
+                return {
+                  key: line.id,
+                  label: (
+                    <Space>
+                      <ApartmentOutlined style={{ color: '#1890ff' }} />
+                      <Text strong>{line.name}</Text>
+                      <Badge count={linePrograms.length} style={{ backgroundColor: '#52c41a' }} />
+                    </Space>
+                  ),
+                  children: (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+                      {linePrograms.map((program: any) => (
+                        <div
+                          key={program.id}
+                          className="program-card"
+                          style={{
+                            width: '100%',
+                            background: 'white',
+                            borderRadius: '12px',
+                            borderLeft: '4px solid #005BC1',
+                            boxShadow: '0px 4px 12px rgba(30, 58, 138, 0.05)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            position: 'relative',
+                            overflow: 'hidden',
+                            border: '1px solid #F1F4F5',
+                            borderLeftWidth: '4px',
+                            transition: 'all 0.3s'
+                          }}
+                        >
+                          {/* Top Part */}
+                          <div style={{ padding: '20px 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                              <div style={{
+                                width: '40px',
+                                height: '40px',
+                                background: 'rgba(0, 91, 193, 0.05)',
+                                borderRadius: '8px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                              }}>
+                                <AppstoreOutlined style={{ color: '#005BC1', fontSize: '20px' }} />
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <div style={{ color: '#2D3335', fontSize: '16px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
+                                  {program.name}
+                                </div>
+                                <div style={{ color: '#5A6062', fontSize: '12px', fontFamily: 'Liberation Mono, monospace' }}>
+                                  ID: {program.code}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{
+                              background: program.status === 'completed' ? 'rgba(61, 137, 255, 0.20)' : 'rgba(222, 204, 253, 0.40)',
+                              borderRadius: '9999px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '2px 10px',
+                              gap: '6px'
+                            }}>
+                              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: program.status === 'completed' ? '#005BC1' : '#50426B' }}></div>
+                              <span style={{
+                                color: program.status === 'completed' ? '#005BC1' : '#50426B',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                fontFamily: 'WenQuanYi Zen Hei, sans-serif',
+                                letterSpacing: '0.50px'
+                              }}>
+                                {program.status === 'completed' ? '已完成' : '进行中'}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          {/* Bottom Part */}
+                          <div style={{
+                            padding: '12px 24px',
+                            borderTop: '1px solid #F1F4F5',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ color: '#5A6062', fontSize: '11px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
+                                当前版本：
+                              </span>
+                              <div style={{ background: 'rgba(0, 91, 193, 0.05)', padding: '2px 8px', borderRadius: '8px' }}>
+                                <span style={{ color: '#005BC1', fontSize: '11px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
+                                  {program.version || '暂无版本'}
+                                </span>
+                              </div>
+                            </div>
+                            <div
+                              className="program-card-detail"
+                              onClick={() => handleViewProgramDetail(program)}
+                              style={{ cursor: 'pointer', transition: 'opacity 0.2s', display: 'flex', alignItems: 'center' }}
+                            >
+                              <span style={{ color: '#005BC1', fontSize: '12px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
+                                详情
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ),
+                };
+              })}
+          />
+        )}
+      </Drawer>
+
+      <Drawer
+        title={
+          <Space>
+            <AppstoreOutlined />
+            <span>{currentProgram?.name || '程序详情'}</span>
+          </Space>
+        }
+        placement="right"
+        onClose={() => setProgramDetailVisible(false)}
+        open={programDetailVisible}
+        width={520}
+      >
+        {currentProgram && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <div style={{ background: '#F8F9FA', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '8px' }}>程序名称</div>
+              <div style={{ color: '#2D3335', fontSize: '18px', fontWeight: 800 }}>{currentProgram.name}</div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '14px', borderRadius: '12px' }}>
+                <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>程序编号</div>
+                <div style={{ color: '#2D3335', fontSize: '14px', fontWeight: 600 }}>{currentProgram.code || '-'}</div>
+              </div>
+              <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '14px', borderRadius: '12px' }}>
+                <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>当前版本</div>
+                <div style={{ color: '#005BC1', fontSize: '14px', fontWeight: 700 }}>{currentProgram.version || '暂无版本'}</div>
+              </div>
+              <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '14px', borderRadius: '12px' }}>
+                <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>生产线</div>
+                <div style={{ color: '#2D3335', fontSize: '14px', fontWeight: 600 }}>{currentProgram.production_line?.name || '-'}</div>
+              </div>
+              <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '14px', borderRadius: '12px' }}>
+                <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '6px' }}>状态</div>
+                <div>
+                  <Tag color={currentProgram.status === 'completed' ? 'blue' : 'purple'}>
+                    {currentProgram.status === 'completed' ? '已完成' : '进行中'}
+                  </Tag>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '8px' }}>程序描述</div>
+              <div style={{ color: '#2D3335', fontSize: '14px', lineHeight: 1.7 }}>
+                {currentProgram.description || '暂无描述'}
+              </div>
+            </div>
+
+            <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '10px' }}>版本信息</div>
+              {programVersions.length > 0 ? (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {programVersions.slice(0, 3).map((version: any) => (
+                    <div key={version.version} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#F8F9FA', borderRadius: '10px' }}>
+                      <div>
+                        <div style={{ color: '#2D3335', fontSize: '13px', fontWeight: 700 }}>{version.version}</div>
+                        <div style={{ color: '#5A6062', fontSize: '12px' }}>{version.change_log || '暂无版本说明'}</div>
+                      </div>
+                      {version.is_current ? <Tag color="blue">当前版本</Tag> : <Tag>历史版本</Tag>}
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary">暂无版本记录</Text>
+              )}
+            </div>
+
+            <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '10px' }}>文件完整性</div>
+              {programVersions.length > 0 ? (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {programVersions.slice(0, 3).map((version: any) => {
+                    const files = version.files || [];
+                    const missingCount = files.filter((file: any) => file.file_exists === false).length;
+                    return (
+                      <div key={`${version.version}-integrity`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#F8F9FA', borderRadius: '10px' }}>
+                        <div>
+                          <div style={{ color: '#2D3335', fontSize: '13px', fontWeight: 700 }}>{version.version}</div>
+                          <div style={{ color: '#5A6062', fontSize: '12px' }}>共 {files.length} 个文件</div>
+                        </div>
+                        {missingCount > 0 ? (
+                          <Tag color="red">缺失 {missingCount} 个文件</Tag>
+                        ) : (
+                          <Tag color="green">文件完整</Tag>
+                        )}
+                      </div>
+                    );
+                  })}
+                </Space>
+              ) : (
+                <Text type="secondary">暂无文件完整性信息</Text>
+              )}
+            </div>
+
+            <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '10px' }}>关联程序</div>
+              {sharedPrograms.length > 0 ? (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  {sharedPrograms.map((program: any) => (
+                    <div key={program.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#F8F9FA', borderRadius: '10px' }}>
+                      <div>
+                        <div style={{ color: '#2D3335', fontSize: '13px', fontWeight: 700 }}>{program.name}</div>
+                        <div style={{ color: '#5A6062', fontSize: '12px' }}>{program.code} / {program.production_line?.name || '-'}</div>
+                      </div>
+                      <Tag color={program.status === 'completed' ? 'blue' : 'purple'}>
+                        {program.status === 'completed' ? '已完成' : '进行中'}
+                      </Tag>
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary">暂无关联程序</Text>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button type="primary" onClick={() => window.location.href = `/programs?keyword=${encodeURIComponent(currentProgram.name)}`}>前往程序管理</Button>
+            </div>
+          </Space>
+        )}
       </Drawer>
     </div>
-  )
-}
+  );
+};
 
-export default VehicleModelManagement
+export default VehicleModelManagement;

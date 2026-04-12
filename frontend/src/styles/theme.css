@@ -1,0 +1,60 @@
+/* 主题颜色变量 */
+:root {
+  /* 主色调 */
+  --primary-color: #1890ff;
+  --primary-hover: #40a9ff;
+  --primary-active: #096dd9;
+  
+  /* 功能色 */
+  --success-color: #52c41a;
+  --warning-color: #faad14;
+  --error-color: #ff4d4f;
+  --info-color: #1890ff;
+  
+  /* 中性色 */
+  --text-primary: rgba(0, 0, 0, 0.85);
+  --text-secondary: rgba(0, 0, 0, 0.45);
+  --text-disabled: rgba(0, 0, 0, 0.25);
+  --border-color: #d9d9d9;
+  --background-color: #fafafa;
+  --card-background: #ffffff;
+  
+  /* 渐变色 */
+  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --gradient-success: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+  --gradient-warning: linear-gradient(135deg, #faad14 0%, #d48806 100%);
+  --gradient-error: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%);
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  
+  /* 间距 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  /* 圆角 */
+  --border-radius-sm: 4px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+  --border-radius-xl: 16px;
+  
+  /* 过渡 */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.5s ease;
+}
+
+/* 深色模式（可选） */
+[data-theme='dark'] {
+  --text-primary: rgba(255, 255, 255, 0.85);
+  --text-secondary: rgba(255, 255, 255, 0.45);
+  --text-disabled: rgba(255, 255, 255, 0.25);
+  --border-color: #434343;
+  --background-color: #141414;
+  --card-background: #1f1f1f;
+}

@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from 'react';
 
 type Theme = 'light' | 'silk';
 
@@ -40,7 +46,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-  }, []);
+  }, [theme]);
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>

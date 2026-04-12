@@ -11,16 +11,17 @@ type ProductionLine struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
-	Name        string         `gorm:"size:200;not null" json:"name"`               // 生产线名称
-	Code        string         `gorm:"uniqueIndex;size:50;not null" json:"code"`    // 生产线编号
-	Type        string         `gorm:"size:50;not null" json:"type"`                // 类型: upper(上车), lower(下车)
-	Description string         `gorm:"type:text" json:"description"`                // 描述
-	Status      string         `gorm:"size:20;default:active" json:"status"`        // 状态: active, inactive
-	ProcessID   uint           `gorm:"index" json:"process_id"`                     // 所属工序
+	Name        string         `gorm:"size:200;not null" json:"name"`            // 生产线名称
+	Code        string         `gorm:"uniqueIndex;size:50;not null" json:"code"` // 生产线编号
+	Type        string         `gorm:"size:50;not null" json:"type"`             // 类型: upper(上车), lower(下车)
+	Description string         `gorm:"type:text" json:"description"`             // 描述
+	Status      string         `gorm:"size:20;default:active" json:"status"`     // 状态: active, inactive
+	ProcessID   uint           `gorm:"index" json:"process_id"`                  // 所属工序
 
 	// 关联
-	Process  Process   `json:"process,omitempty"`
-	Programs []Program `json:"programs,omitempty"`
+	Process              Process                     `json:"process,omitempty"`
+	Programs             []Program                   `json:"programs,omitempty"`
+	CustomFieldTemplates []ProductionLineCustomField `json:"custom_field_templates,omitempty"`
 }
 
 type Process struct {

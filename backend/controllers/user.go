@@ -11,11 +11,11 @@ import (
 
 func GetUsers(c *gin.Context) {
 	var users []models.User
-	query := database.DB
+	query := database.DB.Preload("Department")
 
 	// 筛选
-	if dept := c.Query("department"); dept != "" {
-		query = query.Where("department = ?", dept)
+	if deptID := c.Query("department_id"); deptID != "" {
+		query = query.Where("department_id = ?", deptID)
 	}
 	if role := c.Query("role"); role != "" {
 		query = query.Where("role = ?", role)
@@ -31,7 +31,7 @@ func GetUsers(c *gin.Context) {
 
 func GetUser(c *gin.Context) {
 	var user models.User
-	if err := database.DB.First(&user, c.Param("id")).Error; err != nil {
+	if err := database.DB.Preload("Department").First(&user, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}

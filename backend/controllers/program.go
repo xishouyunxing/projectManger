@@ -3,14 +3,34 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+type programCustomFieldValueSummary struct {
+	FieldID   uint   `json:"field_id"`
+	FieldName string `json:"field_name"`
+	FieldType string `json:"field_type"`
+	SortOrder int    `json:"sort_order"`
+	Value     string `json:"value"`
+}
+
+type programListItem struct {
+	models.Program
+	CustomFieldValues []programCustomFieldValueSummary `json:"custom_field_values"`
+}
 
 func GetPrograms(c *gin.Context) {
 	var programs []models.Program
-	query := database.DB.Preload("ProductionLine").Preload("VehicleModel")
+	query := database.DB.
+		Preload("ProductionLine").
+		Preload("VehicleModel").
+		Preload("CustomFieldValues").
+		Preload("CustomFieldValues.ProductionLineCustomField")
 
 	if lineID := c.Query("production_line_id"); lineID != "" {
 		query = query.Where("production_line_id = ?", lineID)
@@ -24,7 +44,41 @@ func GetPrograms(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, programs)
+	response := make([]programListItem, 0, len(programs))
+	for _, program := range programs {
+		item := programListItem{Program: program}
+		item.CustomFieldValues = summarizeEnabledProgramCustomFieldValues(program.CustomFieldValues)
+		response = append(response, item)
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func summarizeEnabledProgramCustomFieldValues(values []models.ProgramCustomFieldValue) []programCustomFieldValueSummary {
+	summaries := make([]programCustomFieldValueSummary, 0, len(values))
+	for _, value := range values {
+		field := value.ProductionLineCustomField
+		if field.ID == 0 || !field.Enabled {
+			continue
+		}
+
+		summaries = append(summaries, programCustomFieldValueSummary{
+			FieldID:   field.ID,
+			FieldName: field.Name,
+			FieldType: field.FieldType,
+			SortOrder: field.SortOrder,
+			Value:     value.Value,
+		})
+	}
+
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].SortOrder == summaries[j].SortOrder {
+			return summaries[i].FieldID < summaries[j].FieldID
+		}
+		return summaries[i].SortOrder < summaries[j].SortOrder
+	})
+
+	return summaries
 }
 
 func GetProgram(c *gin.Context) {
@@ -34,6 +88,7 @@ func GetProgram(c *gin.Context) {
 		Preload("VehicleModel").
 		Preload("Files").
 		Preload("Versions").
+		Preload("CustomFieldValues").
 		First(&program, c.Param("id")).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
@@ -63,13 +118,24 @@ func UpdateProgram(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
 	}
+	originalProductionLineID := program.ProductionLineID
 
 	if err := c.ShouldBindJSON(&program); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := database.DB.Save(&program).Error; err != nil {
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&program).Error; err != nil {
+			return err
+		}
+		if originalProductionLineID != program.ProductionLineID {
+			if err := tx.Where("program_id = ?", program.ID).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
@@ -78,7 +144,21 @@ func UpdateProgram(c *gin.Context) {
 }
 
 func DeleteProgram(c *gin.Context) {
-	if err := database.DB.Delete(&models.Program{}, c.Param("id")).Error; err != nil {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var program models.Program
+		if err := tx.First(&program, c.Param("id")).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("program_id = ?", c.Param("id")).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&program).Error
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Layout as AntLayout,
@@ -8,12 +8,12 @@ import {
   Typography,
   Space,
   Button,
-  theme,
   Modal,
   Form,
   Input,
   message,
   Divider,
+  Tooltip,
 } from 'antd';
 import {
   DashboardOutlined,
@@ -23,30 +23,38 @@ import {
   UserOutlined,
   LockOutlined,
   LogoutOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   ControlOutlined,
-  FilterOutlined,
   KeyOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
+import GlobalSearch from './GlobalSearch';
 
-const { Header, Sider, Content } = AntLayout;
+const { Header, Content } = AntLayout;
 const { Title } = Typography;
 
 const Layout = () => {
-  const [collapsed, setCollapsed] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [searchVisible, setSearchVisible] = useState(false);
   const [passwordForm] = Form.useForm();
   const [passwordLoading, setPasswordLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout, isAdmin } = useAuth();
-  const {
-    token: { colorBgContainer },
-  } = theme.useToken();
+
+  // 全局快捷键 Ctrl+K
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchVisible(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const menuItems = [
     {
@@ -58,11 +66,6 @@ const Layout = () => {
       key: '/programs',
       icon: <FileTextOutlined />,
       label: '程序管理',
-    },
-    {
-      key: '/file-ignore-list',
-      icon: <FilterOutlined />,
-      label: '文件忽略列表',
     },
     {
       key: '/vehicle-models',
@@ -150,87 +153,120 @@ const Layout = () => {
   };
 
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
-      <Sider trigger={null} collapsible collapsed={collapsed}>
-        <div
-          style={{
-            height: '64px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(255, 255, 255, 0.1)',
-            margin: '16px',
-            borderRadius: '8px',
-          }}
-        >
-          <Title level={4} style={{ color: 'white', margin: 0 }}>
-            {collapsed ? '起重' : '起重机管理'}
-          </Title>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          onClick={handleMenuClick}
-        />
-      </Sider>
-      <AntLayout>
-        <Header
-          style={{
-            padding: '0 16px',
-            background: colorBgContainer,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-          }}
-        >
-          <Button
-            type="text"
-            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
+    <AntLayout style={{ minHeight: '100vh', background: '#f7f8fa' }}>
+      <Header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          background: '#ffffff',
+          padding: '0 24px',
+          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
+          <div
             style={{
-              fontSize: '16px',
-              width: 64,
-              height: 64,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              cursor: 'pointer',
+            }}
+            onClick={() => navigate('/dashboard')}
+          >
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                background: 'linear-gradient(135deg, #165dff 0%, #0e42d2 100%)',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <ControlOutlined style={{ color: '#fff', fontSize: '18px' }} />
+            </div>
+            <span
+              style={{
+                fontSize: '16px',
+                fontWeight: 600,
+                color: '#1d2129',
+              }}
+            >
+              程序管理系统
+            </span>
+          </div>
+
+          <Menu
+            mode="horizontal"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={handleMenuClick}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              flex: 1,
+              minWidth: 0,
             }}
           />
+        </div>
 
-          <Space>
-            <Dropdown
-              menu={{
-                items: userMenuItems,
-                onClick: handleUserMenuClick,
+        <Space size="middle">
+          <Tooltip title="搜索 (Ctrl+K)">
+            <Button
+              type="text"
+              icon={<SearchOutlined />}
+              onClick={() => setSearchVisible(true)}
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
               }}
-              placement="bottomRight"
-              arrow
-            >
-              <Space
+            />
+          </Tooltip>
+
+          <Dropdown
+            menu={{
+              items: userMenuItems,
+              onClick: handleUserMenuClick,
+            }}
+            placement="bottomRight"
+            arrow
+          >
+            <div className="user-avatar-area" style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}>
+              <Avatar
+                size="small"
                 style={{
-                  cursor: 'pointer',
-                  padding: '8px 16px',
-                  borderRadius: '8px',
+                  background: '#165dff',
                 }}
               >
-                <Avatar icon={<UserOutlined />} />
-                <span>{user?.name || '用户'}</span>
-              </Space>
-            </Dropdown>
-          </Space>
-        </Header>
-        <Content
-          style={{
-            margin: '24px 16px',
-            padding: 24,
-            background: colorBgContainer,
-            borderRadius: '8px',
-            minHeight: 280,
-          }}
-        >
-          <Outlet />
-        </Content>
-      </AntLayout>
+                {user?.name?.charAt(0) || 'U'}
+              </Avatar>
+              <span style={{ fontSize: '14px', color: '#1d2129' }}>
+                {user?.name || '用户'}
+              </span>
+            </div>
+          </Dropdown>
+        </Space>
+      </Header>
+
+      <Content
+        style={{
+          margin: '16px',
+          padding: 0,
+          minHeight: 280,
+        }}
+      >
+        <Outlet />
+      </Content>
 
       <Modal
         title={
@@ -321,6 +357,11 @@ const Layout = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      <GlobalSearch
+        open={searchVisible}
+        onClose={() => setSearchVisible(false)}
+      />
     </AntLayout>
   );
 };

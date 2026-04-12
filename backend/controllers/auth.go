@@ -33,7 +33,7 @@ func Login(c *gin.Context) {
 	}
 
 	var user models.User
-	if err := database.DB.Where("employee_id = ?", req.EmployeeID).First(&user).Error; err != nil {
+	if err := database.DB.Preload("Department").Where("employee_id = ?", req.EmployeeID).First(&user).Error; err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "工号或密码错误"})
 		return
 	}
@@ -99,13 +99,21 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	var departmentID *uint
+	if req.Department != "" {
+		var department models.Department
+		if err := database.DB.Where("name = ?", req.Department).First(&department).Error; err == nil {
+			departmentID = &department.ID
+		}
+	}
+
 	user := models.User{
-		EmployeeID: req.EmployeeID,
-		Name:       req.Name,
-		Department: req.Department,
-		Password:   string(hashedPassword),
-		Role:       "user",
-		Status:     "active",
+		EmployeeID:   req.EmployeeID,
+		Name:         req.Name,
+		DepartmentID: departmentID,
+		Password:     string(hashedPassword),
+		Role:         "user",
+		Status:       "active",
 	}
 
 	if err := database.DB.Create(&user).Error; err != nil {

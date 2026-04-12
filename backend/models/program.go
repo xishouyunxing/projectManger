@@ -20,10 +20,11 @@ type Program struct {
 	Status           string         `gorm:"size:20;default:active" json:"status"`     // 状态
 
 	// 关联
-	ProductionLine ProductionLine    `json:"production_line,omitempty"`
-	VehicleModel   VehicleModel      `json:"vehicle_model,omitempty"`
-	Files          []ProgramFile     `json:"files,omitempty"`
-	Versions       []ProgramVersion  `json:"versions,omitempty"`
+	ProductionLine    ProductionLine            `json:"production_line,omitempty"`
+	VehicleModel      VehicleModel              `json:"vehicle_model,omitempty"`
+	Files             []ProgramFile             `json:"files,omitempty"`
+	Versions          []ProgramVersion          `json:"versions,omitempty"`
+	CustomFieldValues []ProgramCustomFieldValue `json:"custom_field_values,omitempty"`
 }
 
 type ProgramFile struct {
@@ -31,14 +32,14 @@ type ProgramFile struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
-	ProgramID   uint           `gorm:"not null;index" json:"program_id"`    // 程序ID
-	FileName    string         `gorm:"size:255;not null" json:"file_name"`  // 文件名
-	FilePath    string         `gorm:"size:500;not null" json:"file_path"`  // 文件路径
-	FileSize    int64          `json:"file_size"`                           // 文件大小(字节)
-	FileType    string         `gorm:"size:50" json:"file_type"`            // 文件类型
-	Version     string         `gorm:"size:50" json:"version"`              // 版本号
-	UploadedBy  uint           `gorm:"index" json:"uploaded_by"`            // 上传人ID
-	Description string         `gorm:"type:text" json:"description"`        // 描述
+	ProgramID   uint           `gorm:"not null;index" json:"program_id"`   // 程序ID
+	FileName    string         `gorm:"size:255;not null" json:"file_name"` // 文件名
+	FilePath    string         `gorm:"size:500;not null" json:"file_path"` // 文件路径
+	FileSize    int64          `json:"file_size"`                          // 文件大小(字节)
+	FileType    string         `gorm:"size:50" json:"file_type"`           // 文件类型
+	Version     string         `gorm:"size:50" json:"version"`             // 版本号
+	UploadedBy  uint           `gorm:"index" json:"uploaded_by"`           // 上传人ID
+	Description string         `gorm:"type:text" json:"description"`       // 描述
 
 	// 关联
 	Program  Program `json:"program,omitempty"`
@@ -46,16 +47,16 @@ type ProgramFile struct {
 }
 
 type ProgramVersion struct {
-	ID          uint           `gorm:"primarykey" json:"id"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
-	ProgramID   uint           `gorm:"not null;index" json:"program_id"`    // 程序ID
-	Version     string         `gorm:"size:50;not null" json:"version"`     // 版本号
-	FileID      uint           `gorm:"not null" json:"file_id"`             // 文件ID
-	UploadedBy  uint           `gorm:"index" json:"uploaded_by"`            // 上传人ID
-	ChangeLog   string         `gorm:"type:text" json:"change_log"`         // 变更日志
-	IsCurrent   bool           `gorm:"default:false" json:"is_current"`     // 是否当前版本
+	ID         uint           `gorm:"primarykey" json:"id"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+	ProgramID  uint           `gorm:"not null;index" json:"program_id"` // 程序ID
+	Version    string         `gorm:"size:50;not null" json:"version"`  // 版本号
+	FileID     uint           `gorm:"not null" json:"file_id"`          // 文件ID
+	UploadedBy uint           `gorm:"index" json:"uploaded_by"`         // 上传人ID
+	ChangeLog  string         `gorm:"type:text" json:"change_log"`      // 变更日志
+	IsCurrent  bool           `gorm:"default:false" json:"is_current"`  // 是否当前版本
 
 	// 关联
 	Program  Program     `json:"program,omitempty"`

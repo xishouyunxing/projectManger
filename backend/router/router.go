@@ -22,7 +22,7 @@ func SetupRouter() *gin.Engine {
 
 	// 静态文件服务
 	r.Static("/uploads", "./uploads")
-	
+
 	// 公开路由
 	public := r.Group("/api")
 	{
@@ -51,9 +51,13 @@ func SetupRouter() *gin.Engine {
 		{
 			lines.GET("", controllers.GetProductionLines)
 			lines.GET("/:id", controllers.GetProductionLine)
+			lines.GET("/:id/custom-fields", controllers.GetProductionLineCustomFields)
 			lines.POST("", middleware.AdminMiddleware(), controllers.CreateProductionLine)
 			lines.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdateProductionLine)
 			lines.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteProductionLine)
+			lines.POST("/:id/custom-fields", middleware.AdminMiddleware(), controllers.CreateProductionLineCustomField)
+			lines.PUT("/:id/custom-fields/:fieldId", middleware.AdminMiddleware(), controllers.UpdateProductionLineCustomField)
+			lines.DELETE("/:id/custom-fields/:fieldId", middleware.AdminMiddleware(), controllers.DeleteProductionLineCustomField)
 		}
 
 		// 工序管理
@@ -83,6 +87,7 @@ func SetupRouter() *gin.Engine {
 			programs.GET("/:id", controllers.GetProgram)
 			programs.POST("", controllers.CreateProgram)
 			programs.PUT("/:id", controllers.UpdateProgram)
+			programs.PUT("/:id/custom-field-values", controllers.SaveProgramCustomFieldValues)
 			programs.DELETE("/:id", controllers.DeleteProgram)
 			programs.GET("/by-vehicle/:vehicle_id", controllers.GetProgramsByVehicle)
 		}
@@ -106,6 +111,17 @@ func SetupRouter() *gin.Engine {
 			permissions.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdatePermission)
 			permissions.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeletePermission)
 			permissions.GET("/user/:user_id", controllers.GetUserPermissions)
+			permissions.GET("/user/:user_id/effective", controllers.GetUserEffectivePermissions)
+		}
+
+		// 部门权限管理 - 仅管理员可用
+		deptPermissions := protected.Group("/department-permissions")
+		deptPermissions.Use(middleware.AdminMiddleware())
+		{
+			deptPermissions.GET("", controllers.GetDepartmentPermissions)
+			deptPermissions.POST("", controllers.CreateDepartmentPermission)
+			deptPermissions.PUT("/:id", controllers.UpdateDepartmentPermission)
+			deptPermissions.DELETE("/:id", controllers.DeleteDepartmentPermission)
 		}
 
 		// 程序版本
@@ -145,6 +161,17 @@ func SetupRouter() *gin.Engine {
 			migration.GET("/status", controllers.GetMigrationStatus)
 			migration.POST("/start", controllers.StartMigration)
 			migration.POST("/rollback", controllers.RollbackMigration)
+		}
+
+		// 部门管理 - 仅管理员可用
+		departments := protected.Group("/departments")
+		departments.Use(middleware.AdminMiddleware())
+		{
+			departments.GET("", controllers.GetDepartments)
+			departments.GET("/:id", controllers.GetDepartment)
+			departments.POST("", controllers.CreateDepartment)
+			departments.PUT("/:id", controllers.UpdateDepartment)
+			departments.DELETE("/:id", controllers.DeleteDepartment)
 		}
 	}
 
