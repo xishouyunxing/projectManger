@@ -85,10 +85,58 @@ cp .env.example .env
 - `DEFAULT_PASSWORD`：初始化管理员账号时使用
 - `UPLOADS_DIR` / `BACKUPS_DIR`：运行时目录
 - `CORS_ALLOWED_ORIGINS`：逗号分隔，不允许 `*`
+- `FRONTEND_DIST`：Go 进程直接托管前端时使用的构建产物目录
 
 前端开发服务器默认运行在 `http://localhost:3000`，并将 `/api` 代理到 `http://localhost:8080`。
 
-### 3. 初始化系统数据
+### 3. 启动方式
+
+#### 方式 A：前后端分离开发（默认）
+
+```bash
+cd backend
+go mod download
+go run .
+```
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+- 后端默认监听：`http://localhost:8080`
+- 前端默认地址：`http://localhost:3000`
+
+#### 方式 B：Go 直接托管前端
+
+先构建前端：
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+再启动后端：
+
+```bash
+cd backend
+go mod download
+go run .
+```
+
+此时需要保证 `FRONTEND_DIST` 指向前端构建目录，例如：
+
+```env
+FRONTEND_DIST=../frontend/dist
+```
+
+启动后由 Go 同时提供：
+- 前端页面与静态资源
+- `/api` 后端接口
+
+### 4. 初始化系统数据
 
 ```bash
 cd backend
@@ -103,26 +151,6 @@ go run -tags initcmd ./init_main.go ./init_all.go
 默认管理员账号：
 - 工号：`admin001`
 - 密码：`.env` 中的 `DEFAULT_PASSWORD`
-
-### 4. 启动后端服务
-
-```bash
-cd backend
-go mod download
-go run .
-```
-
-后端默认监听：`http://localhost:8080`
-
-### 5. 启动前端服务
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-前端默认地址：`http://localhost:3000`
 
 ## 📁 项目结构
 
@@ -142,7 +170,7 @@ projectManger/
 结构说明：
 - `backend/app/bootstrap.go` 负责配置加载、运行目录准备、数据库连接与启动装配
 - `backend/config/config.go` 统一管理 `App / Database / Auth / Storage / Backup / CORS` 配置域
-- `backend/router/router.go` 统一注册 `/api` 路由，并从配置读取 CORS 与静态资源目录
+- `backend/router/router.go` 统一注册 `/api` 路由，并从配置读取 CORS 与静态资源目录；当 `FRONTEND_DIST` 可用时由 Go 直接托管前端构建产物
 - `docs/project-structure.md` 说明源码目录、运行目录和本地工作目录边界
 
 ## 🗄️ 核心数据模型

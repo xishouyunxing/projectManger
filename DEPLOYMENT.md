@@ -56,76 +56,85 @@ nano .env
 
 **.env 配置示例：**
 ```env
-# 数据库配置
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=zlzk
-DB_PASSWORD=zlzk.12345678
-DB_NAME=zlzk
-
-# JWT配置
-JWT_SECRET=crane-system-jwt-secret-key-2024
-
-# 服务器配置
+APP_ENV=development
 SERVER_PORT=8080
+AUTO_MIGRATE=true
+FRONTEND_DIST=../frontend/dist
 
+DB_HOST=127.0.0.1
+DB_PORT=3307
+DB_USER=crane_user
+DB_PASSWORD=zlzk.12345678
+DB_NAME=crane_system
+
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+DEFAULT_PASSWORD=admin123456
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+UPLOADS_DIR=./uploads
+BACKUPS_DIR=./backups
 ```
 
-**启动后端服务：**
+**方式 A：前后端分离开发（默认）**
 ```bash
-# 进入后端目录
+# 启动后端
 cd backend
-
-# 安装依赖
 go mod tidy
+go run .
 
-# 开发模式启动
-go run main.go
-
-# 或构建后运行
-go build -o crane-system.exe    # Windows
-go build -o crane-system       # Linux/macOS
-./crane-system.exe             # Windows
-./crane-system                 # Linux/macOS
-```
-
-后端服务将在 `http://localhost:8080` 启动
-
-### 🎨 3. 前端部署
-
-```bash
-# 新开终端，进入前端目录
+# 新开终端启动前端
 cd frontend
-
-# 安装依赖
 npm install
-
-# 开发模式启动
 npm run dev
-
-# 构建生产版本
-npm run build
 ```
 
-前端开发服务器将在 `http://localhost:3000` 启动
+- 后端：`http://localhost:8080`
+- 前端：`http://localhost:3000`
+- Vite 会将 `/api` 代理到后端
 
-### 👤 4. 创建管理员账号
+**方式 B：Go 直接托管前端**
+```bash
+# 先构建前端
+cd frontend
+npm install
+npm run build
+
+# 再启动后端
+cd ../backend
+go mod tidy
+go run .
+```
+
+此方式要求 `FRONTEND_DIST` 指向前端构建输出目录，例如：
+
+```env
+FRONTEND_DIST=../frontend/dist
+```
+
+启动后统一通过后端访问页面与接口，例如：`http://localhost:8080`
+
+### 👤 3. 创建管理员账号
 
 ```bash
-# 在backend目录下运行初始化脚本
+# 在 backend 目录下运行初始化脚本
 cd backend
-go run init_all.go
+go run -tags initcmd ./init_main.go ./init_all.go
 ```
 
 **默认管理员账号：**
 - 工号：`admin001`
-- 密码：`admin123456`
+- 密码：`.env` 中的 `DEFAULT_PASSWORD`
 
 ## 🏭 生产环境部署
 
 ### 🔧 1. 后端部署
 
-#### 🐧 使用 systemd (Linux推荐)
+后端支持两种生产部署模式：
+
+- **方案 A：前后端分离**：前端由 Nginx 或独立容器托管，Nginx 将 `/api` 代理到 Go 后端
+- **方案 B：Go 单体托管**：前端构建产物由 Go 后端直接托管，统一通过同一个端口访问
+
+#### 🐧 使用 systemd（适用于 Go 单体托管 或 纯 API 服务）
 
 **创建服务文件：**
 ```bash
@@ -144,6 +153,8 @@ User=www-data
 Group=www-data
 WorkingDirectory=/opt/crane-system
 Environment=GIN_MODE=release
+# Go 单体托管前端时，指向前端构建目录
+Environment=FRONTEND_DIST=/opt/crane-system/frontend-dist
 ExecStart=/opt/crane-system/crane-system
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
@@ -181,7 +192,7 @@ sudo systemctl status crane-system
 sudo journalctl -u crane-system -f
 ```
 
-#### 🐳 使用 Docker
+#### 🐳 使用 Docker（适用于 Go 单体托管）
 
 **后端 Dockerfile：**
 ```dockerfile
@@ -243,20 +254,23 @@ CMD ["./crane-system"]
 # 构建镜像
 docker build -t crane-backend:latest .
 
-# 运行容器
+# 运行容器（Go 直接托管 frontend-dist）
 docker run -d \
   --name crane-backend \
   --restart unless-stopped \
-  -p 3000:3000 \
+  -p 8080:8080 \
   -v /opt/crane-data/uploads:/app/uploads \
   -v /opt/crane-data/backups:/app/backups \
   -v /opt/crane-data/.env:/app/.env \
+  -v /opt/crane-data/frontend-dist:/app/frontend-dist:ro \
   crane-backend:latest
 ```
 
 ### 🎨 2. 前端部署
 
-#### 🌐 使用 Nginx（推荐生产方案）
+#### 方案 A：前后端分离（推荐生产方案）
+
+##### 🌐 使用 Nginx
 
 **构建前端：**
 ```bash
@@ -371,6 +385,37 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+#### 方案 B：Go 单体托管前端
+
+此方案不再单独部署 Nginx 静态站点，流程如下：
+
+```bash
+# 1. 构建前端
+cd frontend
+npm ci
+npm run build
+
+# 2. 将 dist 发布到后端约定目录
+sudo mkdir -p /opt/crane-system/frontend-dist
+sudo cp -r dist/* /opt/crane-system/frontend-dist/
+
+# 3. 在后端环境中设置 FRONTEND_DIST
+# 例如 systemd 中配置：
+# Environment=FRONTEND_DIST=/opt/crane-system/frontend-dist
+
+# 4. 启动或重启后端
+sudo systemctl restart crane-system
+```
+
+访问方式：
+- 页面：`http://your-domain-or-host:8080`
+- API：`http://your-domain-or-host:8080/api/...`
+
+适用场景：
+- 内网部署
+- 单机部署
+- 希望减少前端单独运行时与反向代理配置
+
 #### 🐳 使用 Docker 容器化前端
 
 **前端 Dockerfile：**
@@ -442,7 +487,9 @@ server {
 }
 ```
 
-### 🐳 3. 使用 Docker Compose（一体化部署 - 推荐）
+### 🐳 3. 使用 Docker Compose
+
+#### 方案 A：前后端分离（一体化部署 - 推荐）
 
 **生产级 docker-compose.yml：**
 ```yaml
@@ -564,15 +611,20 @@ networks:
 ```env
 # 数据库配置
 MYSQL_ROOT_PASSWORD=your_secure_root_password
-DB_USER=zlzk
+DB_USER=crane_user
 DB_PASSWORD=zlzk.12345678
-DB_NAME=zlzk
+DB_NAME=crane_system
 
 # JWT配置
-JWT_SECRET=crane-system-jwt-secret-key-2024-change-this
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+DEFAULT_PASSWORD=admin123456
 
-# 服务器配置
-CORS_ORIGINS=http://localhost,https://your-domain.com
+# 应用配置
+APP_ENV=production
+SERVER_PORT=8080
+AUTO_MIGRATE=false
+FRONTEND_DIST=/app/frontend-dist
+CORS_ALLOWED_ORIGINS=http://localhost,https://your-domain.com
 
 # Redis配置（可选）
 REDIS_PASSWORD=crane_redis_password
@@ -580,7 +632,7 @@ REDIS_PASSWORD=crane_redis_password
 
 **启动和管理：**
 ```bash
-# 构建并启动所有服务
+# 构建并启动所有服务（前后端分离）
 docker-compose up -d --build
 
 # 查看服务状态
@@ -602,6 +654,20 @@ docker-compose down
 # 完全清理（包括数据卷）
 docker-compose down -v
 ```
+
+#### 方案 B：Docker 中由 Go 直接托管前端
+
+可移除独立 `frontend` 服务，仅保留 `backend` 与 `mysql`，并将前端构建结果挂载到后端容器：
+
+```yaml
+backend:
+  environment:
+    FRONTEND_DIST: /app/frontend-dist
+  volumes:
+    - ./frontend/dist:/app/frontend-dist:ro
+```
+
+此时统一通过后端端口访问页面与 `/api`。
 
 **健康检查：**
 ```bash

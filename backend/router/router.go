@@ -4,6 +4,11 @@ import (
 	"crane-system/config"
 	"crane-system/controllers"
 	"crane-system/middleware"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -158,5 +163,40 @@ func SetupRouter() *gin.Engine {
 		}
 	}
 
+	registerFrontendRoutes(r)
+
 	return r
+}
+
+func registerFrontendRoutes(r *gin.Engine) {
+	frontendDist := config.AppConfig.App.FrontendDist
+	indexPath := filepath.Join(frontendDist, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		return
+	}
+
+	r.NoRoute(func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		requestPath := c.Request.URL.Path
+		if requestPath == "/api" || strings.HasPrefix(requestPath, "/api/") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if requestPath == "/uploads" || strings.HasPrefix(requestPath, "/uploads/") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		frontendPath := filepath.Join(frontendDist, filepath.FromSlash(strings.TrimPrefix(path.Clean(requestPath), "/")))
+		if info, err := os.Stat(frontendPath); err == nil && !info.IsDir() {
+			c.File(frontendPath)
+			return
+		}
+
+		c.File(indexPath)
+	})
 }
