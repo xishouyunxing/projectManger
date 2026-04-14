@@ -35,7 +35,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		claims := &Claims{}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte(config.AppConfig.JWTSecret), nil
+			return []byte(config.AppConfig.Auth.JWTSecret), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -44,7 +44,6 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 验证用户是否存在且状态正常
 		var user models.User
 		if err := database.DB.First(&user, claims.UserID).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})

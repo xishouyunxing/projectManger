@@ -1,13 +1,15 @@
-.PHONY: help install dev build clean docker-build docker-up docker-down init-data
+.PHONY: help install dev build clean docker-build docker-up docker-down init-data backend-run frontend-run
 
 help:
 	@echo "起重机生产线程序管理系统 - 命令列表"
 	@echo ""
 	@echo "  make install       - 安装所有依赖"
 	@echo "  make init-data     - 初始化系统数据"
-	@echo "  make dev           - 启动开发环境"
+	@echo "  make dev           - 输出本地开发启动方式"
+	@echo "  make backend-run   - 启动后端服务"
+	@echo "  make frontend-run  - 启动前端开发服务"
 	@echo "  make build         - 构建生产版本"
-	@echo "  make clean         - 清理构建文件"
+	@echo "  make clean         - 清理构建和运行时产物"
 	@echo "  make docker-build  - 构建Docker镜像"
 	@echo "  make docker-up     - 启动Docker容器"
 	@echo "  make docker-down   - 停止Docker容器"
@@ -21,14 +23,19 @@ install:
 
 init-data:
 	@echo "初始化系统数据..."
-	cd backend && go run init_all.go
-	@echo "数据�完成!"
+	cd backend && go run -tags initcmd ./init_main.go ./init_all.go
+	@echo "数据初始化完成!"
 
 dev:
-	@echo "启动开发环境..."
-	@echo "请在不同终端窗口运行:"
-	@echo "  终端1: cd backend && go run main.go"
-	@echo "  终端2: cd frontend && npm run dev"
+	@echo "请在两个终端分别运行:"
+	@echo "  make backend-run"
+	@echo "  make frontend-run"
+
+backend-run:
+	cd backend && go run .
+
+frontend-run:
+	cd frontend && npm run dev
 
 build:
 	@echo "构建后端..."
@@ -38,10 +45,10 @@ build:
 	@echo "构建完成!"
 
 clean:
-	@echo "清理构建文件..."
+	@echo "清理构建和运行时产物..."
 	rm -f backend/crane-system
 	rm -rf frontend/dist
-	rm -rf frontend/node_modules
+	rm -rf logs
 	@echo "清理完成!"
 
 docker-build:

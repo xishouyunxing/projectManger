@@ -62,64 +62,54 @@
 mysql -u root -p
 
 -- 创建数据库
-CREATE DATABASE zlzk CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE crane_system CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 创建专用用户（推荐）
-CREATE USER 'zlzk'@'localhost' IDENTIFIED BY 'zlzk.12345678';
-GRANT ALL PRIVILEGES ON zlzk.* TO 'zlzk'@'localhost';
+CREATE USER 'crane_user'@'localhost' IDENTIFIED BY 'zlzk.12345678';
+GRANT ALL PRIVILEGES ON crane_system.* TO 'crane_user'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
 ### 2. 配置环境变量
 
-在项目根目录创建 `.env`：
+复制模板并填写实际值：
 
-```env
-# 数据库配置
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=zlzk
-DB_PASSWORD=zlzk.12345678
-DB_NAME=zlzk
-
-# JWT 配置（必须至少 32 个字符）
-JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
-
-# 服务配置
-SERVER_PORT=8080
-DEFAULT_PASSWORD=zlzk.12345678
-FRONTEND_DIST=../frontend/dist
+```bash
+cp .env.example .env
 ```
 
-说明：
-- 后端会优先从项目根目录加载 `.env`
-- `JWT_SECRET` 未配置或长度不足时，后端会直接启动失败
-- 前端开发服务器默认运行在 `http://localhost:3000`
-- 前端开发环境会将 `/api` 代理到 `http://localhost:8080`
+关键配置说明：
+- `APP_ENV`：`development` / `test` / `production`
+- `AUTO_MIGRATE`：开发环境默认允许自动迁移，生产环境默认关闭
+- `JWT_SECRET`：必须至少 32 个字符
+- `DEFAULT_PASSWORD`：初始化管理员账号时使用
+- `UPLOADS_DIR` / `BACKUPS_DIR`：运行时目录
+- `CORS_ALLOWED_ORIGINS`：逗号分隔，不允许 `*`
+
+前端开发服务器默认运行在 `http://localhost:3000`，并将 `/api` 代理到 `http://localhost:8080`。
 
 ### 3. 初始化系统数据
 
 ```bash
-# 在项目根目录执行
-go run ./init_all.go
+cd backend
+go run -tags initcmd ./init_main.go ./init_all.go
 ```
 
 初始化会自动创建：
+- 数据库结构
 - 部门
 - 管理员账号
-- 车型基础数据
-- 生产线基础数据
 
 默认管理员账号：
 - 工号：`admin001`
-- 密码：`admin123456`
+- 密码：`.env` 中的 `DEFAULT_PASSWORD`
 
 ### 4. 启动后端服务
 
 ```bash
 cd backend
 go mod download
-go run main.go
+go run .
 ```
 
 后端默认监听：`http://localhost:8080`
@@ -127,11 +117,6 @@ go run main.go
 ### 5. 启动前端服务
 
 ```bash
-# 方法 1：使用便捷脚本（推荐）
-fnpm install
-fnpm run dev
-
-# 方法 2：传统方式
 cd frontend
 npm install
 npm run dev
@@ -143,23 +128,22 @@ npm run dev
 
 ```text
 projectManger/
-├── backend/        # Gin + GORM 后端服务
-├── frontend/       # React + Vite 前端应用
-├── backups/        # 备份文件目录
-├── uploads/        # 上传文件目录
-├── init_all.go     # 根目录初始化脚本
+├── backend/        # Gin + GORM 后端源码
+├── frontend/       # React + Vite 前端源码
+├── docs/           # 设计文档、维护文档
+├── deploy/         # 部署配置（源码级）
+├── backups/        # 运行时备份目录（不纳入版本控制）
+├── uploads/        # 运行时上传目录（不纳入版本控制）
 ├── Makefile        # 常用开发命令
 ├── docker-compose.yml
 └── README.md
 ```
 
 结构说明：
-- `backend/main.go` 负责加载配置、连接数据库、自动迁移、初始化默认管理员、检查未完成任务并启动 Gin
-- `backend/router/router.go` 统一注册 `/api` 路由
-- `backend/models/` 定义核心数据模型与关联关系
-- `backend/task/` 提供长任务管理能力，用于批量导入等异步流程
-- `frontend/src/App.tsx` 定义应用路由与全局 Provider
-- `frontend/src/services/api.ts` 统一处理 API 请求、JWT 注入与 `401` 跳转
+- `backend/app/bootstrap.go` 负责配置加载、运行目录准备、数据库连接与启动装配
+- `backend/config/config.go` 统一管理 `App / Database / Auth / Storage / Backup / CORS` 配置域
+- `backend/router/router.go` 统一注册 `/api` 路由，并从配置读取 CORS 与静态资源目录
+- `docs/project-structure.md` 说明源码目录、运行目录和本地工作目录边界
 
 ## 🗄️ 核心数据模型
 
@@ -206,19 +190,6 @@ ProgramCustomFieldValue
   程序在自定义字段上的取值
 ```
 
-### 关系概览
-- `Department` ← `User`（一对多）
-- `Process` ← `ProductionLine`（一对多）
-- `ProductionLine` ← `Program`（一对多）
-- `VehicleModel` ← `Program`（一对多）
-- `User` ← `UserPermission`（一对多）
-- `Department` ← `DepartmentPermission`（一对多）
-- `ProductionLine` ← `UserPermission` / `DepartmentPermission`（一对多）
-- `ProductionLine` ← `ProductionLineCustomField`（一对多）
-- `Program` ← `ProgramFile` / `ProgramVersion`（一对多）
-- `Program` ← `ProgramRelation`（程序自关联）
-- `Program` ← `ProgramCustomFieldValue`（一对多）
-
 ## 🔒 认证与权限
 
 - 所有受保护接口统一挂在 `/api` 下，并通过 JWT Bearer Token 认证
@@ -231,119 +202,4 @@ ProgramCustomFieldValue
 ### 公开接口
 ```text
 POST /api/login                 # 登录
-POST /api/register              # 注册
 ```
-
-### 用户与部门
-```text
-GET    /api/users
-GET    /api/users/:id
-POST   /api/users
-PUT    /api/users/:id
-DELETE /api/users/:id
-PUT    /api/users/:id/password
-PUT    /api/users/:id/reset-password
-
-GET    /api/departments
-GET    /api/departments/:id
-POST   /api/departments
-PUT    /api/departments/:id
-DELETE /api/departments/:id
-```
-
-### 工序、生产线、车型
-```text
-GET    /api/processes
-POST   /api/processes
-PUT    /api/processes/:id
-DELETE /api/processes/:id
-
-GET    /api/production-lines
-GET    /api/production-lines/:id
-GET    /api/production-lines/:id/custom-fields
-POST   /api/production-lines
-PUT    /api/production-lines/:id
-DELETE /api/production-lines/:id
-POST   /api/production-lines/:id/custom-fields
-PUT    /api/production-lines/:id/custom-fields/:fieldId
-DELETE /api/production-lines/:id/custom-fields/:fieldId
-
-GET    /api/vehicle-models
-POST   /api/vehicle-models
-PUT    /api/vehicle-models/:id
-DELETE /api/vehicle-models/:id
-```
-
-### 程序、文件、版本、关联
-```text
-GET    /api/programs
-GET    /api/programs/:id
-POST   /api/programs
-PUT    /api/programs/:id
-PUT    /api/programs/:id/custom-field-values
-DELETE /api/programs/:id
-GET    /api/programs/by-vehicle/:vehicle_id
-
-POST   /api/files/upload
-GET    /api/files/program/:program_id
-GET    /api/files/download/:id
-GET    /api/files/download/program/:program_id/latest
-GET    /api/files/download/version/:version
-DELETE /api/files/:id
-
-GET    /api/versions/program/:program_id
-POST   /api/versions
-PUT    /api/versions/:id/activate
-
-GET    /api/relations/program/:program_id
-POST   /api/relations
-DELETE /api/relations/:id
-```
-
-### 权限、备份、迁移、任务
-```text
-GET    /api/permissions
-POST   /api/permissions
-PUT    /api/permissions/:id
-DELETE /api/permissions/:id
-GET    /api/permissions/user/:user_id
-GET    /api/permissions/user/:user_id/effective
-
-GET    /api/department-permissions
-POST   /api/department-permissions
-PUT    /api/department-permissions/:id
-DELETE /api/department-permissions/:id
-
-POST   /api/backup/database
-POST   /api/backup/files
-POST   /api/backup/full
-GET    /api/backup
-GET    /api/backup/download/:name
-DELETE /api/backup/:name
-POST   /api/backup/restore/database/:name
-POST   /api/backup/restore/files/:name
-
-GET    /api/migration/status
-POST   /api/migration/start
-POST   /api/migration/rollback
-```
-
-## 🧪 开发命令
-
-```bash
-make install          # 安装依赖
-make dev              # 查看开发启动提示
-make build            # 构建前后端
-make test             # 运行全部测试
-make lint             # 运行全部 lint
-
-cd backend && go test ./... -v -cover
-cd frontend && npm test -- --run
-cd frontend && npm run lint
-```
-
-## 📌 说明
-
-- 当前仓库的初始化脚本入口位于根目录 `init_all.go`
-- 后端在存在 `frontend/dist` 时可直接托管已构建的前端静态资源
-- README 仅展示当前代码中可确认的主路径；更完整的调用细节请以 `backend/router/router.go` 和前端页面实现为准

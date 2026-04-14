@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"crane-system/config"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,32 +9,27 @@ import (
 	"strings"
 )
 
-const (
-	BackupDir  = "./backups"
-	UploadDir  = "./uploads"
-)
+func BackupDir() string {
+	return config.AppConfig.Backup.Dir
+}
+
+func UploadDir() string {
+	return config.AppConfig.Storage.UploadsDir
+}
 
 // 文件存储结构相关工具函数
 
 // SanitizeFilename 清理文件名，移除不安全字符
 func SanitizeFilename(filename string) string {
-	// 移除或替换不安全的字符
 	reg := regexp.MustCompile(`[<>:"/\\|?*]`)
 	sanitized := reg.ReplaceAllString(filename, "_")
-	
-	// 移除前后空格和点
 	sanitized = strings.Trim(sanitized, " .")
-	
-	// 限制长度
 	if len(sanitized) > 255 {
 		sanitized = sanitized[:255]
 	}
-	
-	// 确保不为空
 	if sanitized == "" {
 		sanitized = "unnamed"
 	}
-	
 	return sanitized
 }
 
@@ -95,12 +91,11 @@ func CopyFile(src, dst string) error {
 
 // MoveFile 移动文件
 func MoveFile(src, dst string) error {
-	// 确保目标目录存在
 	dir := filepath.Dir(dst)
 	if err := EnsureDirectoryExists(dir); err != nil {
 		return err
 	}
-	
+
 	return os.Rename(src, dst)
 }
 
@@ -125,19 +120,13 @@ func IsSafePath(basePath, targetPath string) bool {
 	if err != nil {
 		return false
 	}
-	
-	// 检查是否包含 ".."
-	if strings.Contains(relPath, "..") {
-		return false
-	}
-	
-	return true
+	return !strings.Contains(relPath, "..")
 }
 
 // GetDirectorySize 获取目录大小
 func GetDirectorySize(dirPath string) (int64, error) {
 	var size int64
-	
+
 	err := filepath.Walk(dirPath, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -147,14 +136,14 @@ func GetDirectorySize(dirPath string) (int64, error) {
 		}
 		return nil
 	})
-	
+
 	return size, err
 }
 
 // ListFiles 列出目录中的所有文件
 func ListFiles(dirPath string) ([]string, error) {
 	var files []string
-	
+
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -164,7 +153,7 @@ func ListFiles(dirPath string) ([]string, error) {
 		}
 		return nil
 	})
-	
+
 	return files, err
 }
 
@@ -174,13 +163,13 @@ type BackupInfo struct {
 	Path      string `json:"path"`
 	Size      int64  `json:"size"`
 	CreatedAt string `json:"created_at"`
-	Type      string `json:"type"` // "database" 或 "files"
+	Type      string `json:"type"`
 }
 
 // BackupStatus 备份状态
 type BackupStatus struct {
-	Status    string `json:"status"`    // "running", "completed", "failed"
-	Progress  int    `json:"progress"`  // 0-100
+	Status    string `json:"status"`
+	Progress  int    `json:"progress"`
 	Message   string `json:"message"`
 	StartTime string `json:"start_time"`
 	EndTime   string `json:"end_time,omitempty"`

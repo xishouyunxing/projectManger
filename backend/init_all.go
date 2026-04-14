@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crane-system/app"
 	"crane-system/config"
 	"crane-system/database"
 	"crane-system/models"
@@ -9,49 +10,42 @@ import (
 )
 
 func InitAll() {
-	log.Println("🚀 开始初始化系统数据...")
+	log.Println("开始初始化系统数据...")
 
-	// 加载配置
-	config.LoadConfig()
-
-	// 连接数据库
-	if err := database.Connect(); err != nil {
-		log.Fatal("数据库连接失败:", err)
+	cfg, err := app.SetupInfrastructure()
+	if err != nil {
+		log.Fatal("初始化基础设施失败:", err)
 	}
 
-	// 自动迁移
 	if err := database.AutoMigrate(); err != nil {
 		log.Fatal("数据库迁移失败:", err)
 	}
 
-	// 1. 创建管理员账号
 	createDepartments()
-	createAdmin()
+	createAdmin(cfg)
 
-	log.Println("🎉 系统数据初始化完成！")
-	log.Println("ℹ️ 已初始化：数据库结构、部门、管理员账号")
-	log.Println("ℹ️ 未初始化：工序、车型、生产线，请在系统中按业务需要手工录入")
-	log.Println("🔑 默认登录信息:")
-	log.Println("   工号: admin001")
-	log.Println("   密码: admin123456")
+	log.Println("系统数据初始化完成")
+	log.Println("已初始化：数据库结构、部门、管理员账号")
+	log.Println("未初始化：工序、车型、生产线，请在系统中按业务需要手工录入")
+	log.Println("默认登录信息:")
+	log.Println("  工号: admin001")
+	log.Printf("  密码: %s", cfg.Auth.DefaultPassword)
 }
 
-func createAdmin() {
+func createAdmin(cfg *config.Config) {
 	var adminDepartment models.Department
 	if err := database.DB.Where("name = ?", "IT部门").First(&adminDepartment).Error; err != nil {
-		log.Printf("❌ 查询管理员部门失败: %v", err)
+		log.Printf("查询管理员部门失败: %v", err)
 		return
 	}
 
-	// 生成管理员密码的哈希值
-	password := "admin123456"
+	password := cfg.Auth.DefaultPassword
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		log.Printf("密码加密失败: %v", err)
 		return
 	}
 
-	// 创建管理员用户
 	admin := models.User{
 		EmployeeID:   "admin001",
 		EmployeeNo:   "admin001",
@@ -62,22 +56,19 @@ func createAdmin() {
 		Status:       "active",
 	}
 
-	// 检查是否已存在
 	var existingUser models.User
 	result := database.DB.Where("employee_id = ?", admin.EmployeeID).First(&existingUser)
-
 	if result.Error == nil {
-		log.Printf("✅ 管理员账号已存在")
+		log.Printf("管理员账号已存在")
 		return
 	}
 
-	// 创建管理员
 	if err := database.DB.Create(&admin).Error; err != nil {
-		log.Printf("❌ 创建管理员失败: %v", err)
+		log.Printf("创建管理员失败: %v", err)
 		return
 	}
 
-	log.Printf("✅ 创建管理员账号")
+	log.Printf("创建管理员账号成功")
 }
 
 func createDepartments() {
@@ -94,7 +85,7 @@ func createDepartments() {
 		}
 		database.DB.Create(&department)
 	}
-	log.Printf("✅ 创建部门数据")
+	log.Printf("创建部门数据成功")
 }
 
 func createProcesses() {
@@ -112,7 +103,7 @@ func createProcesses() {
 		}
 		database.DB.Create(&process)
 	}
-	log.Printf("✅ 创建工序数据")
+	log.Printf("创建工序数据成功")
 }
 
 func createVehicleModels() {
@@ -130,7 +121,7 @@ func createVehicleModels() {
 		}
 		database.DB.Create(&vehicle)
 	}
-	log.Printf("✅ 创建车型数据")
+	log.Printf("创建车型数据成功")
 }
 
 func createProductionLines() {
@@ -157,5 +148,5 @@ func createProductionLines() {
 		}
 		database.DB.Create(&line)
 	}
-	log.Printf("✅ 创建生产线数据")
+	log.Printf("创建生产线数据成功")
 }

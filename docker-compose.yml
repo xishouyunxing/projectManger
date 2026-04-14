@@ -28,20 +28,28 @@ services:
     ports:
       - "8080:8080"
     environment:
+      APP_ENV: production
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
       DB_PASSWORD: crane123456
       DB_NAME: crane_system
-      JWT_SECRET: crane-secret-key-change-in-production
+      JWT_SECRET: crane-secret-key-change-in-production-1234567890
+      DEFAULT_PASSWORD: admin123456
       SERVER_PORT: 8080
+      AUTO_MIGRATE: "false"
+      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      UPLOADS_DIR: /app/uploads
+      BACKUPS_DIR: /app/backups
+      FRONTEND_DIST: /app/frontend-dist
     depends_on:
       mysql:
         condition: service_healthy
     networks:
       - crane-network
     volumes:
-      - ./backend/uploads:/app/uploads
+      - ./uploads:/app/uploads
+      - ./backups:/app/backups
 
   frontend:
     build:

@@ -19,13 +19,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	backupDir = "./backups"
-)
-
-func init() {
-	// 创建备份目录
-	os.MkdirAll(backupDir, os.ModePerm)
+func backupDir() string {
+	return utils.BackupDir()
 }
 
 // CreateDatabaseBackup 创建数据库备份
@@ -33,10 +28,10 @@ func CreateDatabaseBackup(c *gin.Context) {
 	// 生成备份文件名
 	timestamp := time.Now().Format("20060102_150405")
 	backupFileName := fmt.Sprintf("database_backup_%s.sql", timestamp)
-	backupFilePath := filepath.Join(backupDir, backupFileName)
+	backupFilePath := filepath.Join(backupDir(), backupFileName)
 
 	// 确保备份目录存在
-	if err := utils.EnsureDirectoryExists(backupDir); err != nil {
+	if err := utils.EnsureDirectoryExists(backupDir()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建备份目录失败"})
 		return
 	}
@@ -66,8 +61,8 @@ func CreateDatabaseBackup(c *gin.Context) {
 
 // CreateFilesBackup 创建文件系统备份
 func CreateFilesBackup(c *gin.Context) {
-	// 检查uploads目录是否存在
-	if !utils.FileExists(utils.UploadDir) {
+	// 检查上传目录是否存在
+	if !utils.FileExists(utils.UploadDir()) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "文件目录不存在"})
 		return
 	}
@@ -75,17 +70,17 @@ func CreateFilesBackup(c *gin.Context) {
 	// 生成备份文件名
 	timestamp := time.Now().Format("20060102_150405")
 	backupFileName := fmt.Sprintf("files_backup_%s.zip", timestamp)
-	backupFilePath := filepath.Join(backupDir, backupFileName)
+	backupFilePath := filepath.Join(backupDir(), backupFileName)
 
 	// 获取目录大小
-	dirSize, err := utils.GetDirectorySize(utils.UploadDir)
+	dirSize, err := utils.GetDirectorySize(utils.UploadDir())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取文件大小失败"})
 		return
 	}
 
 	// 创建ZIP备份文件
-	if err := createZipBackup(utils.UploadDir, backupFilePath); err != nil {
+	if err := createZipBackup(utils.UploadDir(), backupFilePath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件备份失败: " + err.Error()})
 		return
 	}
@@ -108,10 +103,10 @@ func CreateFilesBackup(c *gin.Context) {
 func CreateFullBackup(c *gin.Context) {
 	timestamp := time.Now().Format("20060102_150405")
 	backupFileName := fmt.Sprintf("full_backup_%s.zip", timestamp)
-	backupFilePath := filepath.Join(backupDir, backupFileName)
+	backupFilePath := filepath.Join(backupDir(), backupFileName)
 
 	// 创建临时目录用于备份
-	tempDir := filepath.Join(backupDir, "temp", timestamp)
+	tempDir := filepath.Join(backupDir(), "temp", timestamp)
 	if err := utils.EnsureDirectoryExists(tempDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败"})
 		return
@@ -129,10 +124,10 @@ func CreateFullBackup(c *gin.Context) {
 	// 备份文件目录
 	filesBackupName := fmt.Sprintf("files_%s.zip", timestamp)
 	filesBackupPath := filepath.Join(tempDir, filesBackupName)
-	
-	// 检查uploads目录是否存在，如果不存在或为空则创建空ZIP文件
-	if utils.FileExists(utils.UploadDir) {
-		if err := createZipBackup(utils.UploadDir, filesBackupPath); err != nil {
+
+	// 检查上传目录是否存在，如果不存在或为空则创建空ZIP文件
+	if utils.FileExists(utils.UploadDir()) {
+		if err := createZipBackup(utils.UploadDir(), filesBackupPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "文件备份失败: " + err.Error()})
 			return
 		}
@@ -172,7 +167,7 @@ func GetBackupList(c *gin.Context) {
 	var backups []utils.BackupInfo
 
 	// 读取备份目录
-	files, err := os.ReadDir(backupDir)
+	files, err := os.ReadDir(backupDir())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取备份目录失败"})
 		return
@@ -189,8 +184,8 @@ func GetBackupList(c *gin.Context) {
 		}
 
 		fileName := file.Name()
-		filePath := filepath.Join(backupDir, fileName)
-		
+		filePath := filepath.Join(backupDir(), fileName)
+
 		// 确定备份类型
 		backupType := "unknown"
 		if strings.HasPrefix(fileName, "database_backup_") {
@@ -226,10 +221,10 @@ func GetBackupList(c *gin.Context) {
 // DeleteBackup 删除备份文件
 func DeleteBackup(c *gin.Context) {
 	backupName := c.Param("name")
-	backupPath := filepath.Join(backupDir, backupName)
+	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir)) {
+	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -252,10 +247,10 @@ func DeleteBackup(c *gin.Context) {
 // RestoreDatabase 恢复数据库
 func RestoreDatabase(c *gin.Context) {
 	backupName := c.Param("name")
-	backupPath := filepath.Join(backupDir, backupName)
+	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir)) {
+	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -274,8 +269,8 @@ func RestoreDatabase(c *gin.Context) {
 
 	// 创建当前数据库的备份作为回滚点
 	currentBackupName := fmt.Sprintf("rollback_before_restore_%s.sql", time.Now().Format("20060102_150405"))
-	currentBackupPath := filepath.Join(backupDir, currentBackupName)
-	
+	currentBackupPath := filepath.Join(backupDir(), currentBackupName)
+
 	if err := createMySQLDump(currentBackupPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建回滚点失败: " + err.Error()})
 		return
@@ -283,7 +278,7 @@ func RestoreDatabase(c *gin.Context) {
 
 	// 如果是完整备份，需要先解压
 	if strings.HasPrefix(backupName, "full_backup_") {
-		tempDir := filepath.Join(backupDir, "temp_restore", time.Now().Format("20060102_150405"))
+		tempDir := filepath.Join(backupDir(), "temp_restore", time.Now().Format("20060102_150405"))
 		if err := utils.EnsureDirectoryExists(tempDir); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败"})
 			return
@@ -317,7 +312,7 @@ func RestoreDatabase(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "数据库恢复成功",
+		"message":         "数据库恢复成功",
 		"rollback_backup": currentBackupName,
 	})
 }
@@ -325,10 +320,10 @@ func RestoreDatabase(c *gin.Context) {
 // RestoreFiles 恢复文件系统
 func RestoreFiles(c *gin.Context) {
 	backupName := c.Param("name")
-	backupPath := filepath.Join(backupDir, backupName)
+	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir)) {
+	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -347,10 +342,10 @@ func RestoreFiles(c *gin.Context) {
 
 	// 创建当前文件的备份作为回滚点
 	currentBackupName := fmt.Sprintf("rollback_files_before_restore_%s.zip", time.Now().Format("20060102_150405"))
-	currentBackupPath := filepath.Join(backupDir, currentBackupName)
-	
-	if utils.FileExists(utils.UploadDir) {
-		if err := createZipBackup(utils.UploadDir, currentBackupPath); err != nil {
+	currentBackupPath := filepath.Join(backupDir(), currentBackupName)
+
+	if utils.FileExists(utils.UploadDir()) {
+		if err := createZipBackup(utils.UploadDir(), currentBackupPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建回滚点失败"})
 			return
 		}
@@ -358,7 +353,7 @@ func RestoreFiles(c *gin.Context) {
 
 	// 如果是完整备份，需要先解压
 	if strings.HasPrefix(backupName, "full_backup_") {
-		tempDir := filepath.Join(backupDir, "temp_restore", time.Now().Format("20060102_150405"))
+		tempDir := filepath.Join(backupDir(), "temp_restore", time.Now().Format("20060102_150405"))
 		if err := utils.EnsureDirectoryExists(tempDir); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败"})
 			return
@@ -386,21 +381,21 @@ func RestoreFiles(c *gin.Context) {
 	}
 
 	// 删除现有文件目录
-	if utils.FileExists(utils.UploadDir) {
-		if err := utils.DeleteDirectory(utils.UploadDir); err != nil {
+	if utils.FileExists(utils.UploadDir()) {
+		if err := utils.DeleteDirectory(utils.UploadDir()); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除现有文件失败"})
 			return
 		}
 	}
 
 	// 解压文件备份
-	if err := extractZipBackup(backupPath, filepath.Dir(utils.UploadDir)); err != nil {
+	if err := extractZipBackup(backupPath, filepath.Dir(utils.UploadDir())); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件恢复失败: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "文件系统恢复成功",
+		"message":         "文件系统恢复成功",
 		"rollback_backup": currentBackupName,
 	})
 }
@@ -408,10 +403,10 @@ func RestoreFiles(c *gin.Context) {
 // DownloadBackup 下载备份文件
 func DownloadBackup(c *gin.Context) {
 	backupName := c.Param("name")
-	backupPath := filepath.Join(backupDir, backupName)
+	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir)) {
+	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -484,7 +479,7 @@ func extractZipBackup(zipPath, targetDir string) error {
 
 	for _, file := range zipReader.File {
 		filePath := filepath.Join(targetDir, file.Name)
-		
+
 		// 检查路径安全性
 		if !strings.HasPrefix(filepath.Clean(filePath), filepath.Clean(targetDir)) {
 			continue // 跳过不安全的路径
@@ -591,29 +586,29 @@ func addFileToZip(zipWriter *zip.Writer, filePath, entryName string) error {
 func createMySQLDump(backupPath string) error {
 	// 构建mysqldump命令，移除需要额外权限的选项
 	cmd := exec.CommandContext(context.Background(), "mysqldump",
-		"-h", config.AppConfig.DBHost,
-		"-P", config.AppConfig.DBPort,
-		"-u", config.AppConfig.DBUser,
-		fmt.Sprintf("-p%s", config.AppConfig.DBPassword),
+		"-h", config.AppConfig.Database.Host,
+		"-P", config.AppConfig.Database.Port,
+		"-u", config.AppConfig.Database.User,
+		fmt.Sprintf("-p%s", config.AppConfig.Database.Password),
 		"--single-transaction",
 		"--quick",
 		"--lock-tables=false",
-		config.AppConfig.DBName,
+		config.AppConfig.Database.Name,
 	)
-	
+
 	// 创建备份文件
 	file, err := os.Create(backupPath)
 	if err != nil {
 		return fmt.Errorf("创建备份文件失败: %v", err)
 	}
 	defer file.Close()
-	
+
 	// 执行备份
 	cmd.Stdout = file
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("执行mysqldump失败: %v", err)
 	}
-	
+
 	return nil
 }
 
@@ -621,26 +616,26 @@ func createMySQLDump(backupPath string) error {
 func restoreMySQLDump(backupPath string) error {
 	// 构建mysql命令
 	cmd := exec.CommandContext(context.Background(), "mysql",
-		"-h", config.AppConfig.DBHost,
-		"-P", config.AppConfig.DBPort,
-		"-u", config.AppConfig.DBUser,
-		fmt.Sprintf("-p%s", config.AppConfig.DBPassword),
-		config.AppConfig.DBName,
+		"-h", config.AppConfig.Database.Host,
+		"-P", config.AppConfig.Database.Port,
+		"-u", config.AppConfig.Database.User,
+		fmt.Sprintf("-p%s", config.AppConfig.Database.Password),
+		config.AppConfig.Database.Name,
 	)
-	
+
 	// 打开备份文件
 	file, err := os.Open(backupPath)
 	if err != nil {
 		return fmt.Errorf("打开备份文件失败: %v", err)
 	}
 	defer file.Close()
-	
+
 	// 执行恢复
 	cmd.Stdin = file
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("执行mysql恢复失败: %v", err)
 	}
-	
+
 	return nil
 }
 
@@ -655,7 +650,7 @@ func createEmptyZip(targetPath string) error {
 	zipWriter := zip.NewWriter(zipFile)
 	defer zipWriter.Close()
 
-	// 创建一个空的目录条目表示uploads目录
+	// 创建一个空的目录条目表示上传目录
 	_, err = zipWriter.Create("uploads/")
 	return err
 }

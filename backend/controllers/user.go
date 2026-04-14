@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"crane-system/config"
 	"crane-system/database"
 	"crane-system/models"
 	"net/http"
@@ -155,7 +156,7 @@ func ResetPassword(c *gin.Context) {
 	}
 
 	// 重置为默认密码
-	defaultPassword := "123456"
+	defaultPassword := config.AppConfig.Auth.DefaultPassword
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(defaultPassword), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
@@ -168,5 +169,5 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "密码已重置为: 123456"})
+	c.JSON(http.StatusOK, gin.H{"message": "密码已重置为配置中的默认密码"})
 }

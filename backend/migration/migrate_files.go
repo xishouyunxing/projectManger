@@ -53,7 +53,7 @@ func MigrateFilesToNewStructure() error {
 	}
 
 	// 确保备份目录存在
-	backupDir := filepath.Join(utils.BackupDir, "file_migration", time.Now().Format("20060102_150405"))
+	backupDir := filepath.Join(utils.BackupDir(), "file_migration", time.Now().Format("20060102_150405"))
 	if err := utils.EnsureDirectoryExists(backupDir); err != nil {
 		status.Status = "failed"
 		status.ErrorMsg = fmt.Sprintf("创建备份目录失败: %v", err)
@@ -63,10 +63,10 @@ func MigrateFilesToNewStructure() error {
 	// 创建迁移前的完整备份
 	log.Println("创建迁移前备份...")
 	backupName := fmt.Sprintf("pre_migration_backup_%s.zip", time.Now().Format("20060102_150405"))
-	backupPath := filepath.Join(utils.BackupDir, backupName)
-	
-	if utils.FileExists(utils.UploadDir) {
-		if err := createZipBackup(utils.UploadDir, backupPath); err != nil {
+	backupPath := filepath.Join(utils.BackupDir(), backupName)
+
+	if utils.FileExists(utils.UploadDir()) {
+		if err := createZipBackup(utils.UploadDir(), backupPath); err != nil {
 			status.Status = "failed"
 			status.ErrorMsg = fmt.Sprintf("创建备份失败: %v", err)
 			return err
@@ -121,7 +121,7 @@ func MigrateFilesToNewStructure() error {
 	// 完成迁移
 	status.Status = "completed"
 	status.EndTime = time.Now().Format(time.RFC3339)
-	
+
 	log.Printf("文件迁移完成: 成功 %d, 失败 %d", status.MigratedFiles, status.FailedFiles)
 	return nil
 }
@@ -129,8 +129,8 @@ func MigrateFilesToNewStructure() error {
 // migrateSingleFile 迁移单个文件
 func migrateSingleFile(file *models.ProgramFile, backupDir string) error {
 	// 获取文件的完整路径
-	oldPath := filepath.Join(utils.UploadDir, file.FilePath)
-	
+	oldPath := filepath.Join(utils.UploadDir(), file.FilePath)
+
 	// 检查旧文件是否存在
 	if !utils.FileExists(oldPath) {
 		log.Printf("源文件不存在: %s", oldPath)
@@ -157,7 +157,7 @@ func migrateSingleFile(file *models.ProgramFile, backupDir string) error {
 
 	// 生成新的目录路径
 	newDir := utils.GenerateProgramPath(
-		utils.UploadDir,
+		utils.UploadDir(),
 		vehicleModel.Name,
 		productionLine.Name,
 		program.Code,
@@ -185,7 +185,7 @@ func migrateSingleFile(file *models.ProgramFile, backupDir string) error {
 	}
 
 	// 更新数据库中的文件路径
-	relativePath, err := utils.GetRelativePath(utils.UploadDir, newPath)
+	relativePath, err := utils.GetRelativePath(utils.UploadDir(), newPath)
 	if err != nil {
 		return fmt.Errorf("获取相对路径失败: %v", err)
 	}
@@ -204,7 +204,7 @@ func isAlreadyMigrated(filePath string) bool {
 	// 新的路径格式应该包含车型/程序名称_程序编号/版本的层级结构
 	// 这里简单检查是否包含下划线，因为新格式中程序编号和程序名称用下划线连接
 	// 更准确的判断可以检查路径层级
-	return filepath.Dir(filePath) != "." && filepath.Dir(filePath) != utils.UploadDir
+	return filepath.Dir(filePath) != "." && filepath.Dir(filePath) != utils.UploadDir()
 }
 
 // createZipBackup 创建ZIP备份
@@ -262,7 +262,7 @@ func RollbackMigration() error {
 	}
 
 	// 查找最新的备份文件
-	backupDir := filepath.Join(utils.BackupDir, "file_migration")
+	backupDir := filepath.Join(utils.BackupDir(), "file_migration")
 	files, err := os.ReadDir(backupDir)
 	if err != nil {
 		return fmt.Errorf("读取备份目录失败: %v", err)
@@ -278,7 +278,7 @@ func RollbackMigration() error {
 			if err != nil {
 				continue
 			}
-			
+
 			if dirInfo.ModTime().After(latestTime) {
 				latestTime = dirInfo.ModTime()
 				latestBackup = dirPath
@@ -310,7 +310,7 @@ func restoreFromBackup(backupDir string) error {
 		}
 
 		backupFilePath := filepath.Join(backupDir, file.Name())
-		restoreFilePath := filepath.Join(utils.UploadDir, file.Name())
+		restoreFilePath := filepath.Join(utils.UploadDir(), file.Name())
 
 		// 恢复文件
 		if err := utils.CopyFile(backupFilePath, restoreFilePath); err != nil {

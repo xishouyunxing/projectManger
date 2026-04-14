@@ -655,32 +655,30 @@ cd ..
 go run backend/init_all.go
 ```
 
-### 🔧 方法二：通过API注册
+### 🔧 方法二：通过管理员接口创建用户
 
 ```bash
-# 注册普通用户
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "employee_id": "admin001",
-    "employee_no": "admin001",
-    "name": "系统管理员",
-    "department": "IT部门",
-    "password": "admin123456"
-  }'
-
-# 登录获取token
-curl -X POST http://localhost:3000/api/auth/login \
+# 先登录获取token
+curl -X POST http://localhost:8080/api/login \
   -H "Content-Type: application/json" \
   -d '{
     "employee_id": "admin001",
     "password": "admin123456"
   }'
 
-# 使用管理员权限更新角色（如果需要）
-# 或者直接在数据库中修改
-mysql -u zlzk -p'zlzk.12345678' zlzk
-UPDATE users SET role='admin', status='active' WHERE employee_id='admin001';
+# 使用管理员接口创建普通用户
+curl -X POST http://localhost:8080/api/users \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "employee_id": "user001",
+    "employee_no": "user001",
+    "name": "普通用户",
+    "department_id": 1,
+    "role": "user",
+    "password": "user123456",
+    "status": "active"
+  }'
 ```
 
 ### 🗄️ 方法三：直接数据库插入

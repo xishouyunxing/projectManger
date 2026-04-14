@@ -61,7 +61,7 @@ func createProductionLineCustomFieldAdminToken(t *testing.T, userID uint) string
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
+	tokenString, err := token.SignedString([]byte(config.AppConfig.Auth.JWTSecret))
 	if err != nil {
 		t.Fatalf("sign jwt: %v", err)
 	}

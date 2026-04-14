@@ -18,13 +18,6 @@ type LoginRequest struct {
 	Password   string `json:"password" binding:"required"`
 }
 
-type RegisterRequest struct {
-	EmployeeID string `json:"employee_id" binding:"required"`
-	Name       string `json:"name" binding:"required"`
-	Department string `json:"department"`
-	Password   string `json:"password" binding:"required"`
-}
-
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -48,7 +41,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 生成JWT
 	claims := &middleware.Claims{
 		UserID: user.ID,
 		Role:   user.Role,
@@ -59,7 +51,7 @@ func Login(c *gin.Context) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
+	tokenString, err := token.SignedString([]byte(config.AppConfig.Auth.JWTSecret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成令牌失败"})
 		return
@@ -73,61 +65,6 @@ func Login(c *gin.Context) {
 			"name":        user.Name,
 			"department":  user.Department,
 			"role":        user.Role,
-		},
-	})
-}
-
-func Register(c *gin.Context) {
-	var req RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 检查工号是否已存在
-	var count int64
-	database.DB.Model(&models.User{}).Where("employee_id = ?", req.EmployeeID).Count(&count)
-	if count > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "工号已存在"})
-		return
-	}
-
-	// 密码加密
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
-		return
-	}
-
-	var departmentID *uint
-	if req.Department != "" {
-		var department models.Department
-		if err := database.DB.Where("name = ?", req.Department).First(&department).Error; err == nil {
-			departmentID = &department.ID
-		}
-	}
-
-	user := models.User{
-		EmployeeID:   req.EmployeeID,
-		Name:         req.Name,
-		DepartmentID: departmentID,
-		Password:     string(hashedPassword),
-		Role:         "user",
-		Status:       "active",
-	}
-
-	if err := database.DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建用户失败"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "注册成功",
-		"user": gin.H{
-			"id":          user.ID,
-			"employee_id": user.EmployeeID,
-			"name":        user.Name,
-			"department":  user.Department,
 		},
 	})
 }
