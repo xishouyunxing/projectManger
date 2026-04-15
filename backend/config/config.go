@@ -55,15 +55,32 @@ type Config struct {
 var AppConfig *Config
 
 func LoadConfig() error {
+	exeDir := ""
+	if executablePath, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(executablePath)
+	}
+
 	envPaths := []string{
-		"../.env",
+		filepath.Join(exeDir, ".env"),
 		".env",
+		"../.env",
 	}
 
 	envLoaded := false
+	seen := make(map[string]struct{})
 	for _, path := range envPaths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+
+		normalizedPath := filepath.Clean(path)
+		if _, exists := seen[normalizedPath]; exists {
+			continue
+		}
+		seen[normalizedPath] = struct{}{}
+
 		if err := godotenv.Load(path); err == nil {
-			log.Printf("成功加载.env文件: %s", path)
+			log.Printf("成功加载.env文件: %s", normalizedPath)
 			envLoaded = true
 			break
 		}
