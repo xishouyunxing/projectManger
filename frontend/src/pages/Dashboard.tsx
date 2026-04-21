@@ -118,12 +118,7 @@ const styles = `
   }
 `;
 
-// 注入样式
-if (typeof document !== 'undefined') {
-  const styleSheet = document.createElement('style');
-  styleSheet.textContent = styles;
-  document.head.appendChild(styleSheet);
-}
+const DASHBOARD_STYLE_ID = 'dashboard-inline-style';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -145,6 +140,22 @@ const Dashboard = () => {
 
   // 页面切换状态
   const [currentPage, setCurrentPage] = useState<'dashboard' | 'preview'>('dashboard');
+
+  useEffect(() => {
+    let styleSheet = document.getElementById(DASHBOARD_STYLE_ID) as HTMLStyleElement | null;
+    if (!styleSheet) {
+      styleSheet = document.createElement('style');
+      styleSheet.id = DASHBOARD_STYLE_ID;
+      styleSheet.textContent = styles;
+      document.head.appendChild(styleSheet);
+    }
+
+    return () => {
+      if (styleSheet?.parentNode) {
+        styleSheet.parentNode.removeChild(styleSheet);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     loadStats();

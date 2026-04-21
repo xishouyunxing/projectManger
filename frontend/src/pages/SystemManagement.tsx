@@ -20,6 +20,7 @@ import {
   Col,
   Statistic,
   Collapse,
+  Tooltip,
 } from 'antd';
 import {
   DatabaseOutlined,
@@ -36,6 +37,7 @@ import {
   InfoCircleOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -479,46 +481,51 @@ const SystemManagement = () => {
       title: '操作',
       key: 'actions',
       render: (_: any, record: BackupInfo) => (
-        <Space>
-          <Button
-            type="link"
-            icon={<CloudDownloadOutlined />}
-            onClick={() => downloadBackup(record.name)}
-            style={{ padding: 0 }}
-          >
-            下载
-          </Button>
+        <Space size="small">
+          <Tooltip title="下载备份">
+            <Button
+              type="text"
+              icon={<CloudDownloadOutlined style={{ color: '#5A6062' }} />}
+              onClick={() => downloadBackup(record.name)}
+              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+            />
+          </Tooltip>
+          {(record.type === 'database' || record.type === 'full') && (
+            <Tooltip title="恢复数据库">
+              <Button
+                type="text"
+                icon={<DatabaseOutlined style={{ color: '#005BC1' }} />}
+                onClick={() => confirmRestore(record.name, 'database')}
+                loading={operationLoading === 'restore-database'}
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(0, 91, 193, 0.08)' }}
+              />
+            </Tooltip>
+          )}
+          {(record.type === 'files' || record.type === 'full') && (
+            <Tooltip title="恢复文件">
+              <Button
+                type="text"
+                icon={<FileOutlined style={{ color: '#0E8A6A' }} />}
+                onClick={() => confirmRestore(record.name, 'files')}
+                loading={operationLoading === 'restore-files'}
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(14, 138, 106, 0.10)' }}
+              />
+            </Tooltip>
+          )}
           <Popconfirm
             title="确定要删除这个备份吗？"
             onConfirm={() => deleteBackup(record.name)}
             okText="确定"
             cancelText="取消"
           >
-            <Button type="link" danger icon={<DeleteOutlined />} style={{ padding: 0 }}>
-              删除
-            </Button>
+            <Tooltip title="删除备份">
+              <Button
+                type="text"
+                icon={<DeleteOutlined style={{ color: '#A83836' }} />}
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }}
+              />
+            </Tooltip>
           </Popconfirm>
-          {record.type === 'database' || record.type === 'full' ? (
-            <Button
-              type="link"
-              icon={<ReloadOutlined />}
-              onClick={() => confirmRestore(record.name, 'database')}
-              loading={operationLoading === 'restore-database'}
-              style={{ padding: 0 }}
-            >
-              恢复数据库
-            </Button>
-          ) : null}
-          {record.type === 'files' || record.type === 'full' ? (
-            <Button
-              type="link"
-              icon={<ReloadOutlined />}
-              onClick={() => confirmRestore(record.name, 'files')}
-              loading={operationLoading === 'restore-files'}
-            >
-              恢复文件
-            </Button>
-          ) : null}
         </Space>
       ),
     },
@@ -566,22 +573,26 @@ const SystemManagement = () => {
       title: '操作',
       key: 'action',
       render: (_: any, record: any) => (
-        <Space size="middle">
-          <Button
-            type="link"
-            size="small"
-            onClick={() => handleEditDepartment(record)}
-            style={{ padding: 0 }}
-          >
-            编辑
-          </Button>
+        <Space size="small">
+          <Tooltip title="编辑部门">
+            <Button
+              type="text"
+              icon={<EditOutlined style={{ color: '#5A6062' }} />}
+              onClick={() => handleEditDepartment(record)}
+              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+            />
+          </Tooltip>
           <Popconfirm
             title="确定删除?"
             onConfirm={() => handleDeleteDepartment(record.id)}
           >
-            <Button type="link" danger icon={<DeleteOutlined />} size="small" style={{ padding: 0 }}>
-              删除
-            </Button>
+            <Tooltip title="删除部门">
+              <Button
+                type="text"
+                icon={<DeleteOutlined style={{ color: '#A83836' }} />}
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }}
+              />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
