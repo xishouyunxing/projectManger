@@ -628,6 +628,34 @@ const SystemManagement = () => {
     },
   ];
 
+  const primaryActionButtonStyle = {
+    background: 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)',
+    border: 'none',
+    boxShadow: '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)',
+    borderRadius: '8px',
+    height: '40px',
+    padding: '0 20px',
+    fontWeight: 600,
+    fontSize: '14px',
+  } as const;
+
+  const secondaryActionButtonStyle = {
+    height: '40px',
+    borderRadius: '8px',
+    border: 'none',
+    background: '#DEE3E6',
+    color: '#2D3335',
+    fontWeight: 700,
+    padding: '0 16px',
+  } as const;
+
+  const newDepartmentButtonStyle = {
+    ...primaryActionButtonStyle,
+    height: '44px',
+    padding: '0 24px',
+    fontSize: '16px',
+  } as const;
+
   if (!isAdmin) {
     return (
       <div style={{ padding: '24px' }}>
@@ -924,7 +952,7 @@ const SystemManagement = () => {
                 <Card
                   title="备份操作"
                   extra={
-                    <Button onClick={loadBackups} loading={loading}>
+                    <Button onClick={loadBackups} loading={loading} style={secondaryActionButtonStyle}>
                       刷新列表
                     </Button>
                   }
@@ -935,6 +963,7 @@ const SystemManagement = () => {
                       icon={<DatabaseOutlined />}
                       onClick={() => createBackup('database')}
                       loading={operationLoading === 'database'}
+                      style={primaryActionButtonStyle}
                     >
                       备份数据库
                     </Button>
@@ -943,15 +972,16 @@ const SystemManagement = () => {
                       icon={<FileOutlined />}
                       onClick={() => createBackup('files')}
                       loading={operationLoading === 'files'}
+                      style={primaryActionButtonStyle}
                     >
                       备份文件系统
                     </Button>
                     <Button
                       type="primary"
-                      danger
                       icon={<CloudDownloadOutlined />}
                       onClick={() => createBackup('full')}
                       loading={operationLoading === 'full'}
+                      style={primaryActionButtonStyle}
                     >
                       创建完整备份
                     </Button>
@@ -1016,6 +1046,7 @@ const SystemManagement = () => {
                     type="primary"
                     icon={<PlusOutlined />}
                     onClick={handleAddDepartment}
+                    style={newDepartmentButtonStyle}
                   >
                     新建部门
                   </Button>

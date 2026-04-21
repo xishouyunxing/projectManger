@@ -18,6 +18,9 @@ type Program struct {
 	Version          string         `gorm:"size:50" json:"version"`                   // 当前版本
 	Description      string         `gorm:"type:text" json:"description"`             // 描述
 	Status           string         `gorm:"size:20;default:active" json:"status"`     // 状态
+	MappingInfo      *ProgramMappingInfo `gorm:"-" json:"mapping_info,omitempty"`
+	OwnVersionCount  int64              `gorm:"-" json:"own_version_count"`
+	OwnFileCount     int64              `gorm:"-" json:"own_file_count"`
 
 	// 关联
 	ProductionLine    ProductionLine            `json:"production_line,omitempty"`
@@ -25,6 +28,14 @@ type Program struct {
 	Files             []ProgramFile             `json:"files,omitempty"`
 	Versions          []ProgramVersion          `json:"versions,omitempty"`
 	CustomFieldValues []ProgramCustomFieldValue `json:"custom_field_values,omitempty"`
+}
+
+
+type ProgramMappingInfo struct {
+	MappingID        uint   `json:"mapping_id"`
+	ParentProgramID  uint   `json:"parent_program_id"`
+	ParentProgramName string `json:"parent_program_name"`
+	ParentProgramCode string `json:"parent_program_code"`
 }
 
 type ProgramFile struct {
@@ -77,4 +88,18 @@ type ProgramRelation struct {
 	// 关联
 	SourceProgram  Program `gorm:"foreignKey:SourceProgramID" json:"source_program,omitempty"`
 	RelatedProgram Program `gorm:"foreignKey:RelatedProgramID" json:"related_program,omitempty"`
+}
+
+type ProgramMapping struct {
+	ID              uint           `gorm:"primarykey" json:"id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ParentProgramID uint           `gorm:"not null;index" json:"parent_program_id"`
+	ChildProgramID  uint           `gorm:"not null;uniqueIndex" json:"child_program_id"`
+	CreatedBy       uint           `gorm:"index" json:"created_by"`
+
+	ParentProgram Program `gorm:"foreignKey:ParentProgramID" json:"parent_program,omitempty"`
+	ChildProgram  Program `gorm:"foreignKey:ChildProgramID" json:"child_program,omitempty"`
+	Creator       User    `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
 }

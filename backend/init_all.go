@@ -133,12 +133,19 @@ func createProductionLines() {
 		processMap[p.Code] = p.ID
 	}
 
+	optionalProcessID := func(code string) *uint {
+		if id, ok := processMap[code]; ok {
+			return &id
+		}
+		return nil
+	}
+
 	lines := []models.ProductionLine{
-		{Name: "吊臂主臂生产线", Code: "UP_ARM_001", Type: "upper", ProcessID: processMap["UP001"], Description: "主要负责起重机吊臂主臂的制造和装配", Status: "active"},
-		{Name: "吊臂副臂生产线", Code: "UP_ARM_002", Type: "upper", ProcessID: processMap["UP001"], Description: "主要负责起重机吊臂副臂的制造和装配", Status: "active"},
-		{Name: "转台装配生产线", Code: "UP_TURN_001", Type: "upper", ProcessID: processMap["UP002"], Description: "负责起重机转台的整体装配", Status: "active"},
-		{Name: "底盘焊接生产线", Code: "LOW_CHASSIS_001", Type: "lower", ProcessID: processMap["LOW001"], Description: "负责起重机底盘的焊接和初步成型", Status: "active"},
-		{Name: "支腿液压生产线", Code: "LOW_LEG_001", Type: "lower", ProcessID: processMap["LOW002"], Description: "负责起重机支腿液压系统的制造", Status: "active"},
+		{Name: "吊臂主臂生产线", Code: "UP_ARM_001", Type: "upper", ProcessID: optionalProcessID("UP001"), Description: "主要负责起重机吊臂主臂的制造和装配", Status: "active"},
+		{Name: "吊臂副臂生产线", Code: "UP_ARM_002", Type: "upper", ProcessID: optionalProcessID("UP001"), Description: "主要负责起重机吊臂副臂的制造和装配", Status: "active"},
+		{Name: "转台装配生产线", Code: "UP_TURN_001", Type: "upper", ProcessID: optionalProcessID("UP002"), Description: "负责起重机转台的整体装配", Status: "active"},
+		{Name: "底盘焊接生产线", Code: "LOW_CHASSIS_001", Type: "lower", ProcessID: optionalProcessID("LOW001"), Description: "负责起重机底盘的焊接和初步成型", Status: "active"},
+		{Name: "支腿液压生产线", Code: "LOW_LEG_001", Type: "lower", ProcessID: optionalProcessID("LOW002"), Description: "负责起重机支腿液压系统的制造", Status: "active"},
 	}
 
 	for _, line := range lines {

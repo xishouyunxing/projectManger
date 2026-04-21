@@ -32,8 +32,13 @@ func SaveProgramCustomFieldValues(c *gin.Context) {
 
 	var savedValues []models.ProgramCustomFieldValue
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		_, targetProgramID, _, err := resolveProgramTarget(tx, parseUintParam(c.Param("id")))
+		if err != nil {
+			return err
+		}
+
 		var program models.Program
-		if err := tx.First(&program, c.Param("id")).Error; err != nil {
+		if err := tx.First(&program, targetProgramID).Error; err != nil {
 			return err
 		}
 

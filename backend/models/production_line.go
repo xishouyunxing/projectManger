@@ -16,10 +16,10 @@ type ProductionLine struct {
 	Type        string         `gorm:"size:50;not null" json:"type"`             // 类型: upper(上车), lower(下车)
 	Description string         `gorm:"type:text" json:"description"`             // 描述
 	Status      string         `gorm:"size:20;default:active" json:"status"`     // 状态: active, inactive
-	ProcessID   uint           `gorm:"index" json:"process_id"`                  // 所属工序
+	ProcessID   *uint          `gorm:"index" json:"process_id"`                  // 所属工序，可为空
 
 	// 关联
-	Process              Process                     `json:"process,omitempty"`
+	Process              *Process                    `json:"process,omitempty"`
 	Programs             []Program                   `json:"programs,omitempty"`
 	CustomFieldTemplates []ProductionLineCustomField `json:"custom_field_templates,omitempty"`
 }

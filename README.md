@@ -79,11 +79,11 @@ cp .env.example .env
 ```
 
 关键配置说明：
-- `APP_ENV`：`development` / `test` / `production`
+- **必填**：`JWT_SECRET`（至少 32 个字符）、`DEFAULT_PASSWORD`（至少 8 个字符）
+- **有默认值**：`SERVER_PORT`、`AUTO_MIGRATE`、`DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`CORS_ALLOWED_ORIGINS`、`UPLOADS_DIR`、`BACKUPS_DIR`
+- **按部署方式决定**：`FRONTEND_DIST` 用于 Go 进程直接托管前端；前后端分离时可沿用默认值
+- `APP_ENV`：建议显式填写为 `development` / `test` / `production`
 - `AUTO_MIGRATE`：开发环境默认允许自动迁移，生产环境默认关闭
-- `JWT_SECRET`：必须至少 32 个字符
-- `DEFAULT_PASSWORD`：初始化管理员账号时使用
-- `UPLOADS_DIR` / `BACKUPS_DIR`：运行时目录
 - `CORS_ALLOWED_ORIGINS`：逗号分隔，不允许 `*`
 - `FRONTEND_DIST`：Go 进程直接托管前端时使用的构建产物目录
 

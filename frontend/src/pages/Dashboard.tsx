@@ -43,6 +43,28 @@ const styles = `
     }
   }
 
+  @keyframes dashboardPageIn {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.996);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes dashboardPanelIn {
+    from {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   .stat-card {
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     background: white;
@@ -58,6 +80,14 @@ const styles = `
     box-shadow: 0px 12px 40px rgba(0, 91, 193, 0.06);
   }
 
+  .dashboard-page-shell {
+    min-height: 100%;
+  }
+
+  .dashboard-section {
+    animation: none;
+  }
+
   .welcome-banner {
     background: transparent;
     border-radius: 16px;
@@ -71,8 +101,9 @@ const styles = `
     padding: 16px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease, background 0.22s ease;
     border: 1px solid transparent;
+    animation: dashboardPanelIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .quick-action-item:hover {
@@ -357,8 +388,8 @@ const Dashboard = () => {
       : programs;
 
     return (
-      <div style={{ padding: '24px', maxWidth: '1600px', margin: '0 auto' }}>
-        <Card style={{ marginBottom: 16 }}>
+      <div className="dashboard-page-shell" style={{ padding: '24px', maxWidth: '1600px', margin: '0 auto' }}>
+        <Card className="dashboard-section" style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
               <FileExcelOutlined style={{ fontSize: '24px', color: '#1890ff' }} />
@@ -399,7 +430,7 @@ const Dashboard = () => {
           </div>
         </Card>
 
-        <Card style={{ marginBottom: 16 }}>
+        <Card className="dashboard-section" style={{ marginBottom: 16 }}>
           <Space size="large">
             <div><Text type="secondary">车型数</Text><Title level={4} style={{ margin: 0 }}>{vehicleModels.length}</Title></div>
             <div><Text type="secondary">生产线数</Text><Title level={4} style={{ margin: 0 }}>{filteredLines.length}</Title></div>
@@ -486,7 +517,7 @@ const Dashboard = () => {
   });
 
   return (
-    <div style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto', background: '#F8F9FA' }}>
+    <div className="dashboard-page-shell" style={{ padding: '32px', maxWidth: '1600px', margin: '0 auto', background: '#F8F9FA' }}>
       {/* 欢迎区域 */}
       <div className="welcome-banner">
         <Text type="secondary" style={{ fontSize: '16px', fontWeight: 500, color: '#5A6062' }}>
@@ -500,7 +531,7 @@ const Dashboard = () => {
       {/* 顶部统计卡片 */}
       <Row gutter={[24, 24]} style={{ marginBottom: '32px' }}>
         <Col xs={24} sm={12} lg={6}>
-          <div className="stat-card" style={{ padding: '24px', animation: `fadeInUp 0.4s both 0.1s` }}>
+          <div className="stat-card" style={{ padding: '24px' }}>
             <Space direction="vertical" style={{ width: '100%', height: '100%', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text type="secondary" style={{ fontSize: '14px', fontWeight: 500, color: '#5A6062' }}>程序总数</Text>
@@ -516,7 +547,7 @@ const Dashboard = () => {
         </Col>
         
         <Col xs={24} sm={12} lg={6}>
-          <div className="stat-card" style={{ padding: '24px', animation: `fadeInUp 0.4s both 0.15s` }}>
+          <div className="stat-card" style={{ padding: '24px' }}>
             <Space direction="vertical" style={{ width: '100%', height: '100%', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text type="secondary" style={{ fontSize: '14px', fontWeight: 500, color: '#5A6062' }}>用户总数</Text>
@@ -532,7 +563,7 @@ const Dashboard = () => {
         </Col>
         
         <Col xs={24} sm={12} lg={6}>
-          <div className="stat-card" style={{ padding: '24px', animation: `fadeInUp 0.4s both 0.2s` }}>
+          <div className="stat-card" style={{ padding: '24px' }}>
             <Space direction="vertical" style={{ width: '100%', height: '100%', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text type="secondary" style={{ fontSize: '14px', fontWeight: 500, color: '#5A6062' }}>生产线数</Text>
@@ -548,7 +579,7 @@ const Dashboard = () => {
         </Col>
         
         <Col xs={24} sm={12} lg={6}>
-          <div className="stat-card" style={{ padding: '24px', animation: `fadeInUp 0.4s both 0.25s` }}>
+          <div className="stat-card" style={{ padding: '24px' }}>
             <Space direction="vertical" style={{ width: '100%', height: '100%', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text type="secondary" style={{ fontSize: '14px', fontWeight: 500, color: '#5A6062' }}>车型数</Text>
@@ -576,7 +607,7 @@ const Dashboard = () => {
               <Row gutter={[12, 12]}>
                 {quickActions.map((item, idx) => (
                    <Col span={8} key={idx}>
-                     <div className="quick-action-item" onClick={() => item.onClick ? item.onClick() : navigate(item.path || '#')}>
+                     <div className="quick-action-item" style={{ animationDelay: `${0.16 + idx * 0.04}s` }} onClick={() => item.onClick ? item.onClick() : navigate(item.path || '#')}>
                        <div style={{ color: item.color, fontSize: '24px', marginBottom: '8px' }}>{item.icon}</div>
                        <div style={{ fontSize: '12px', color: '#2D3335', fontWeight: 500 }}>{item.title}</div>
                      </div>

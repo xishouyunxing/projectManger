@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Layout as AntLayout,
@@ -38,6 +38,8 @@ const { Title } = Typography;
 const Layout = () => {
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [searchVisible, setSearchVisible] = useState(false);
+  const [routeTransitioning, setRouteTransitioning] = useState(false);
+  const prefetchedRoutesRef = useRef(new Set<string>());
   const [passwordForm] = Form.useForm();
   const [passwordLoading, setPasswordLoading] = useState(false);
   const navigate = useNavigate();
@@ -56,44 +58,78 @@ const Layout = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    setRouteTransitioning(true);
+    const timer = window.setTimeout(() => setRouteTransitioning(false), 150);
+    return () => window.clearTimeout(timer);
+  }, [location.pathname]);
+
+  const routePrefetchers: Record<string, () => Promise<unknown>> = {
+    '/dashboard': () => import('../pages/Dashboard'),
+    '/programs': () => import('../pages/ProgramManagement'),
+    '/vehicle-models': () => import('../pages/VehicleModelManagement'),
+    '/production-lines': () => import('../pages/ProductionLineManagement'),
+    '/users': () => import('../pages/UserManagement'),
+    '/permissions': () => import('../pages/PermissionManagement'),
+    '/system-management': () => import('../pages/SystemManagement'),
+  };
+
+  const prefetchRoute = (routePath: string) => {
+    if (prefetchedRoutesRef.current.has(routePath)) {
+      return;
+    }
+    const loader = routePrefetchers[routePath];
+    if (!loader) {
+      return;
+    }
+    prefetchedRoutesRef.current.add(routePath);
+    void loader().catch(() => {
+      prefetchedRoutesRef.current.delete(routePath);
+    });
+  };
+
+  const routeLabel = (path: string, text: string) => (
+    <span onMouseEnter={() => prefetchRoute(path)}>{text}</span>
+  );
+
   const menuItems = [
     {
       key: '/dashboard',
       icon: <DashboardOutlined />,
-      label: '仪表盘',
+      label: routeLabel('/dashboard', '仪表盘'),
     },
     {
       key: '/programs',
       icon: <FileTextOutlined />,
-      label: '程序管理',
+      label: routeLabel('/programs', '程序管理'),
     },
     {
       key: '/vehicle-models',
       icon: <CarOutlined />,
-      label: '车型管理',
+      label: routeLabel('/vehicle-models', '车型管理'),
     },
     {
       key: '/production-lines',
       icon: <SettingOutlined />,
-      label: '生产线管理',
+      label: routeLabel('/production-lines', '生产线管理'),
       requiresAdmin: true,
     },
     {
       key: '/users',
       icon: <UserOutlined />,
-      label: '用户管理',
+      label: routeLabel('/users', '用户管理'),
       requiresAdmin: true,
     },
     {
       key: '/permissions',
       icon: <LockOutlined />,
-      label: '权限管理',
+      label: routeLabel('/permissions', '权限管理'),
       requiresAdmin: true,
     },
     {
       key: '/system-management',
       icon: <ControlOutlined />,
-      label: '系统管理',
+      label: routeLabel('/system-management', '系统管理'),
       requiresAdmin: true,
     },
   ]
@@ -122,6 +158,7 @@ const Layout = () => {
       logout();
       navigate('/login');
     } else {
+      prefetchRoute(key);
       navigate(key);
     }
   };
@@ -206,6 +243,7 @@ const Layout = () => {
             selectedKeys={[location.pathname]}
             items={menuItems}
             onClick={handleMenuClick}
+            className="app-top-menu"
             style={{
               border: 'none',
               background: 'transparent',
@@ -259,13 +297,16 @@ const Layout = () => {
       </Header>
 
       <Content
+        className="app-content-shell"
         style={{
           margin: '16px',
           padding: 0,
           minHeight: 280,
         }}
       >
-        <Outlet />
+        <div className={`app-route-content${routeTransitioning ? ' is-transitioning' : ''}`}>
+          <Outlet />
+        </div>
       </Content>
 
       <Modal

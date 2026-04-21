@@ -56,24 +56,38 @@ nano .env
 
 **.env 配置示例：**
 ```env
+# 必填：运行环境
 APP_ENV=development
+# 有默认值：8080
 SERVER_PORT=8080
+# 有默认值：development 下默认 true，production 下默认 false
 AUTO_MIGRATE=true
+# 仅 Go 直接托管前端时需要显式确认路径；前后端分离可保留默认值
 FRONTEND_DIST=../frontend/dist
 
+# 有默认值，但生产环境建议显式填写
 DB_HOST=127.0.0.1
 DB_PORT=3307
 DB_USER=crane_user
 DB_PASSWORD=zlzk.12345678
 DB_NAME=crane_system
 
+# 必填：至少 32 个字符
 JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+# 必填：至少 8 个字符
 DEFAULT_PASSWORD=admin123456
+# 有默认值，但生产环境必须改成实际前端来源
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
+# 有默认值
 UPLOADS_DIR=./uploads
 BACKUPS_DIR=./backups
 ```
+
+说明：
+- **必填**：`JWT_SECRET`、`DEFAULT_PASSWORD`
+- **有默认值可不填**：`SERVER_PORT`、`AUTO_MIGRATE`、`DB_*`、`CORS_ALLOWED_ORIGINS`、`UPLOADS_DIR`、`BACKUPS_DIR`
+- **按部署方式决定**：`FRONTEND_DIST` 在 Go 直接托管前端时应显式配置；前后端分离时可沿用默认值
 
 **方式 A：前后端分离开发（默认）**
 ```bash

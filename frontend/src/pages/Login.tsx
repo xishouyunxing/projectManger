@@ -420,13 +420,20 @@ const Login = () => {
           flex: 1;
           display: flex;
           flex-direction: column;
-          justify-content: space-between;
+          justify-content: center;
           background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
           padding: 48px;
           color: white;
           position: relative;
           overflow: hidden;
           animation: fadeIn 0.6s ease-out;
+        }
+
+        .login-character-stage {
+          min-height: 64vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .login-left.transitioning {
@@ -549,13 +556,13 @@ const Login = () => {
           />
 
           <div
+            className="login-character-stage"
             style={{
               position: 'relative',
               zIndex: 20,
               display: 'flex',
-              alignItems: 'flex-end',
+              alignItems: 'center',
               justifyContent: 'center',
-              height: '500px',
             }}
           >
             {/* Cartoon Characters Container */}

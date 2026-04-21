@@ -12,7 +12,6 @@ import {
   Popconfirm,
   Drawer,
   Select,
-  Collapse,
   Badge,
   Empty,
   DatePicker,
@@ -37,6 +36,7 @@ const VehicleModelManagement = () => {
   const [currentProgram, setCurrentProgram] = useState<any>(null);
   const [programVersions, setProgramVersions] = useState<any[]>([]);
   const [sharedPrograms, setSharedPrograms] = useState<any[]>([]);
+  const [collapsedLines, setCollapsedLines] = useState<number[]>([]);
   const [form] = Form.useForm();
 
   // 筛选相关状态
@@ -149,6 +149,7 @@ const VehicleModelManagement = () => {
     try {
       const response = await api.get(`/programs/by-vehicle/${record.id}`);
       setPrograms(response.data);
+      setCollapsedLines(productionLines.map((line: any) => line.id));
       setDrawerVisible(true);
     } catch (error) {
       console.error('Failed to load programs:', error);
@@ -162,12 +163,12 @@ const VehicleModelManagement = () => {
     setCurrentProgram(program);
     setLoading(true);
     try {
-      const [versionsRes, sharedRes] = await Promise.all([
+      const [versionsRes, mappingRes] = await Promise.all([
         api.get(`/files/program/${program.id}`),
-        api.get(`/relations/shared/${program.id}`),
+        api.get(`/program-mappings/by-child/${program.id}`),
       ]);
       setProgramVersions(versionsRes.data?.versions || []);
-      setSharedPrograms(sharedRes.data || []);
+      setSharedPrograms(mappingRes.data?.parent_program ? [mappingRes.data.parent_program] : []);
       setProgramDetailVisible(true);
     } catch (error) {
       console.error('Failed to load program detail:', error);
@@ -417,144 +418,111 @@ const VehicleModelManagement = () => {
       </Modal>
 
       <Drawer
-        title={
-          <Space>
-            <CarOutlined />
-            <span>{currentModel?.name} - 程序列表</span>
-          </Space>
-        }
+        title={null}
         placement="right"
         onClose={() => setDrawerVisible(false)}
         open={drawerVisible}
-        width={900}
+        width={630}
+        className="vehicle-program-list-drawer"
+        styles={{ body: { padding: 0, background: '#F8FAFC' } }}
       >
-        {programs.length === 0 ? (
-          <Empty
-            description="暂无程序数据"
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          />
-        ) : (
-          <Collapse
-            defaultActiveKey={productionLines.map((line: any) => line.id)}
-            items={productionLines
-              .filter((line: any) => {
-                // 只显示有程序的生产线
-                return programs.some((p: any) => p.production_line_id === line.id);
-              })
-              .map((line: any) => {
-                const linePrograms = programs.filter(
-                  (p: any) => p.production_line_id === line.id
-                );
-                return {
-                  key: line.id,
-                  label: (
-                    <Space>
-                      <ApartmentOutlined style={{ color: '#1890ff' }} />
-                      <Text strong>{line.name}</Text>
-                      <Badge count={linePrograms.length} style={{ backgroundColor: '#52c41a' }} />
-                    </Space>
-                  ),
-                  children: (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
-                      {linePrograms.map((program: any) => (
-                        <div
-                          key={program.id}
-                          className="program-card"
-                          style={{
-                            width: '100%',
-                            background: 'white',
-                            borderRadius: '12px',
-                            borderLeft: '4px solid #005BC1',
-                            boxShadow: '0px 4px 12px rgba(30, 58, 138, 0.05)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            position: 'relative',
-                            overflow: 'hidden',
-                            border: '1px solid #F1F4F5',
-                            borderLeftWidth: '4px',
-                            transition: 'all 0.3s'
-                          }}
-                        >
-                          {/* Top Part */}
-                          <div style={{ padding: '20px 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ display: 'flex', gap: '12px' }}>
-                              <div style={{
-                                width: '40px',
-                                height: '40px',
-                                background: 'rgba(0, 91, 193, 0.05)',
-                                borderRadius: '8px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center'
-                              }}>
-                                <AppstoreOutlined style={{ color: '#005BC1', fontSize: '20px' }} />
-                              </div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                <div style={{ color: '#2D3335', fontSize: '16px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
-                                  {program.name}
-                                </div>
-                                <div style={{ color: '#5A6062', fontSize: '12px', fontFamily: 'Liberation Mono, monospace' }}>
-                                  ID: {program.code}
-                                </div>
-                              </div>
-                            </div>
-                            <div style={{
-                              background: program.status === 'completed' ? 'rgba(61, 137, 255, 0.20)' : 'rgba(222, 204, 253, 0.40)',
-                              borderRadius: '9999px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              padding: '2px 10px',
-                              gap: '6px'
-                            }}>
-                              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: program.status === 'completed' ? '#005BC1' : '#50426B' }}></div>
-                              <span style={{
-                                color: program.status === 'completed' ? '#005BC1' : '#50426B',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                fontFamily: 'WenQuanYi Zen Hei, sans-serif',
-                                letterSpacing: '0.50px'
-                              }}>
-                                {program.status === 'completed' ? '已完成' : '进行中'}
-                              </span>
-                            </div>
-                          </div>
-                          
-                          {/* Bottom Part */}
-                          <div style={{
-                            padding: '12px 24px',
-                            borderTop: '1px solid #F1F4F5',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                          }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ color: '#5A6062', fontSize: '11px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
-                                当前版本：
-                              </span>
-                              <div style={{ background: 'rgba(0, 91, 193, 0.05)', padding: '2px 8px', borderRadius: '8px' }}>
-                                <span style={{ color: '#005BC1', fontSize: '11px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
-                                  {program.version || '暂无版本'}
-                                </span>
-                              </div>
-                            </div>
-                            <div
-                              className="program-card-detail"
-                              onClick={() => handleViewProgramDetail(program)}
-                              style={{ cursor: 'pointer', transition: 'opacity 0.2s', display: 'flex', alignItems: 'center' }}
-                            >
-                              <span style={{ color: '#005BC1', fontSize: '12px', fontWeight: 700, fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
-                                详情
-                              </span>
-                            </div>
-                          </div>
+        <div style={{ minHeight: '100%', background: '#F8FAFC' }}>
+          <div style={{ padding: '24px 24px 16px', borderBottom: '1px solid rgba(241, 244, 245, 0.9)', background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(12px)' }}>
+            <div style={{ color: '#2D3335', fontSize: '18px', fontWeight: 700 }}>{currentModel?.name} - 程序列表</div>
+            <div style={{ color: '#5A6062', fontSize: '12px', marginTop: '4px' }}>按程序卡片查看当前车型下的已配置程序</div>
+          </div>
+
+          <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {programs.length === 0 ? (
+              <div style={{ padding: '64px 0' }}>
+                <Empty description="暂无程序数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              </div>
+            ) : (
+              productionLines
+                .filter((line: any) => programs.some((p: any) => p.production_line_id === line.id))
+                .map((line: any) => {
+                  const linePrograms = programs.filter((p: any) => p.production_line_id === line.id);
+                  const isCollapsed = collapsedLines.includes(line.id);
+
+                  return (
+                    <div key={line.id} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setCollapsedLines((current) => current.includes(line.id) ? current.filter((id) => id !== line.id) : [...current, line.id])}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '10px 12px', borderRadius: '12px', border: '1px solid #E5E9EC', background: '#FFFFFF', cursor: 'pointer' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <ApartmentOutlined style={{ color: '#005BC1', fontSize: '16px' }} />
+                          <span style={{ color: '#2D3335', fontSize: '14px', fontWeight: 700 }}>{line.name}</span>
+                          <Badge count={linePrograms.length} style={{ backgroundColor: '#005BC1' }} />
                         </div>
-                      ))}
+                        <span style={{ color: '#5A6062', fontSize: '12px', fontWeight: 600 }}>{isCollapsed ? '展开' : '收起'}</span>
+                      </button>
+
+                      {!isCollapsed && linePrograms.map((program: any) => {
+                        const isCompleted = program.status === 'completed';
+                        const statusLabel = isCompleted ? '已完成' : '进行中';
+                        const statusBackground = isCompleted ? 'rgba(61, 137, 255, 0.2)' : 'rgba(222, 204, 253, 0.4)';
+                        const statusColor = isCompleted ? '#005BC1' : '#50426B';
+
+                        return (
+                          <div
+                            key={program.id}
+                            style={{
+                              width: '100%',
+                              background: '#FFFFFF',
+                              borderRadius: '12px',
+                              borderLeft: '4px solid #005BC1',
+                              boxShadow: '0px 25px 50px -12px rgba(30, 58, 138, 0.05)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <div style={{ padding: '20px 20px 12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                <div style={{ width: '40px', height: '40px', background: 'rgba(0, 91, 193, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                  <AppstoreOutlined style={{ color: '#005BC1', fontSize: '20px' }} />
+                                </div>
+                                <div>
+                                  <div style={{ color: '#2D3335', fontSize: '16px', lineHeight: '24px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
+                                    {program.name}
+                                  </div>
+                                  <div style={{ color: '#5A6062', fontSize: '12px', lineHeight: '16px', fontFamily: 'Liberation Mono, monospace' }}>
+                                    ID: {program.code}
+                                  </div>
+                                </div>
+                              </div>
+                              <div style={{ background: statusBackground, color: statusColor, borderRadius: '8px', padding: '2px 8px', fontSize: '10px', lineHeight: '24px', fontWeight: 500, letterSpacing: '0.5px' }}>
+                                {statusLabel}
+                              </div>
+                            </div>
+                            <div style={{ borderTop: '1px solid #F1F4F5', padding: '13px 20px 13px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ color: '#5A6062', fontSize: '11px', lineHeight: '24px', fontWeight: 500 }}>当前版本：</span>
+                                <div style={{ background: 'rgba(0, 91, 193, 0.05)', borderRadius: '8px', padding: '2px 8px' }}>
+                                  <span style={{ color: '#005BC1', fontSize: '11px', lineHeight: '24px', fontWeight: 500 }}>
+                                    {program.version || '暂无版本'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleViewProgramDetail(program)}
+                                style={{ border: 'none', background: 'transparent', color: '#005BC1', fontSize: '12px', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                              >
+                                详情
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ),
-                };
-              })}
-          />
-        )}
+                  );
+                })
+            )}
+          </div>
+        </div>
       </Drawer>
 
       <Drawer
@@ -625,32 +593,6 @@ const VehicleModelManagement = () => {
               )}
             </div>
 
-            <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
-              <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '10px' }}>文件完整性</div>
-              {programVersions.length > 0 ? (
-                <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                  {programVersions.slice(0, 3).map((version: any) => {
-                    const files = version.files || [];
-                    const missingCount = files.filter((file: any) => file.file_exists === false).length;
-                    return (
-                      <div key={`${version.version}-integrity`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#F8F9FA', borderRadius: '10px' }}>
-                        <div>
-                          <div style={{ color: '#2D3335', fontSize: '13px', fontWeight: 700 }}>{version.version}</div>
-                          <div style={{ color: '#5A6062', fontSize: '12px' }}>共 {files.length} 个文件</div>
-                        </div>
-                        {missingCount > 0 ? (
-                          <Tag color="red">缺失 {missingCount} 个文件</Tag>
-                        ) : (
-                          <Tag color="green">文件完整</Tag>
-                        )}
-                      </div>
-                    );
-                  })}
-                </Space>
-              ) : (
-                <Text type="secondary">暂无文件完整性信息</Text>
-              )}
-            </div>
 
             <div style={{ background: '#fff', border: '1px solid #EBEEF0', padding: '16px', borderRadius: '12px' }}>
               <div style={{ color: '#5A6062', fontSize: '12px', fontWeight: 700, marginBottom: '10px' }}>关联程序</div>

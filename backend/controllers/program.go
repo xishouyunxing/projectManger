@@ -46,8 +46,26 @@ func GetPrograms(c *gin.Context) {
 
 	response := make([]programListItem, 0, len(programs))
 	for _, program := range programs {
-		item := programListItem{Program: program}
-		item.CustomFieldValues = summarizeEnabledProgramCustomFieldValues(program.CustomFieldValues)
+		if err := attachProgramMappingInfo(database.DB, &program); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			return
+		}
+
+		effectiveProgram := program
+		if program.MappingInfo != nil {
+			parentProgram, _, _, err := resolveProgramTarget(database.DB, program.ID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+				return
+			}
+			applyParentProgramData(&effectiveProgram, parentProgram)
+			effectiveProgram.MappingInfo = program.MappingInfo
+			effectiveProgram.OwnVersionCount = program.OwnVersionCount
+			effectiveProgram.OwnFileCount = program.OwnFileCount
+		}
+
+		item := programListItem{Program: effectiveProgram}
+		item.CustomFieldValues = summarizeEnabledProgramCustomFieldValues(effectiveProgram.CustomFieldValues)
 		response = append(response, item)
 	}
 
@@ -94,6 +112,19 @@ func GetProgram(c *gin.Context) {
 		return
 	}
 
+	if err := attachProgramMappingInfo(database.DB, &program); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	if program.MappingInfo != nil {
+		parentProgram, _, _, err := resolveProgramTarget(database.DB, program.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			return
+		}
+		applyParentProgramData(&program, parentProgram)
+	}
+
 	c.JSON(http.StatusOK, program)
 }
 
@@ -113,8 +144,14 @@ func CreateProgram(c *gin.Context) {
 }
 
 func UpdateProgram(c *gin.Context) {
+	_, targetProgramID, _, err := resolveProgramTarget(database.DB, parseUintParam(c.Param("id")))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		return
+	}
+
 	var program models.Program
-	if err := database.DB.First(&program, c.Param("id")).Error; err != nil {
+	if err := database.DB.First(&program, targetProgramID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
 	}

@@ -42,6 +42,7 @@ func migrationModels() []any {
 		&models.ProgramFile{},
 		&models.ProgramVersion{},
 		&models.ProgramRelation{},
+		&models.ProgramMapping{},
 		&models.UserPermission{},
 		&models.DepartmentPermission{},
 	}

@@ -37,10 +37,10 @@ const ProgramCustomFieldInputs = ({ fields }: ProgramCustomFieldInputsProps) => 
         <Form.Item
           key={field.id}
           name={['custom_field_values', String(field.id)]}
-          label={field.name}
+          label={<span style={{ color: '#5A6062', fontSize: '10px', fontWeight: 700, letterSpacing: '1px', fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>{field.name}</span>}
         >
           {field.field_type === 'select' ? (
-            <Select allowClear>
+            <Select size="large" allowClear style={{ borderRadius: '12px', boxShadow: '0px 1px 2px rgba(0, 0, 0, 0.05)' }}>
               {parseOptions(field.options_json).map((option) => (
                 <Select.Option key={option} value={option}>
                   {option}
@@ -48,7 +48,7 @@ const ProgramCustomFieldInputs = ({ fields }: ProgramCustomFieldInputsProps) => 
               ))}
             </Select>
           ) : (
-            <Input />
+            <Input size="large" style={{ borderRadius: '12px', boxShadow: '0px 1px 2px rgba(0, 0, 0, 0.05)' }} />
           )}
         </Form.Item>
       ))}

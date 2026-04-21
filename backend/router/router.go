@@ -121,14 +121,24 @@ func SetupRouter() *gin.Engine {
 		{
 			versions.GET("/program/:program_id", controllers.GetProgramVersions)
 			versions.POST("", controllers.CreateVersion)
+			versions.PUT("/:id", controllers.UpdateVersion)
 			versions.PUT("/:id/activate", controllers.ActivateVersion)
 		}
 
-		relations := protected.Group("/relations")
+		programs.POST("/batch-upload", controllers.BatchUploadPrograms)
+		programs.POST("/batch-import", controllers.BatchImportPrograms)
+
+		tasks := protected.Group("/tasks")
 		{
-			relations.GET("/program/:program_id", controllers.GetProgramRelations)
-			relations.POST("", controllers.CreateRelation)
-			relations.DELETE("/:id", controllers.DeleteRelation)
+			tasks.GET("/:task_id/status", controllers.GetTaskStatus)
+		}
+
+		mappings := protected.Group("/program-mappings")
+		{
+			mappings.GET("/by-parent/:program_id", controllers.GetProgramMappingsByParent)
+			mappings.GET("/by-child/:program_id", controllers.GetProgramMappingByChild)
+				mappings.POST("", controllers.CreateProgramMappings)
+			mappings.DELETE("/:id", controllers.DeleteProgramMapping)
 		}
 
 		backup := protected.Group("/backup")

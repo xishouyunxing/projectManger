@@ -5,15 +5,20 @@ import (
 	"crane-system/database"
 	"crane-system/models"
 	"crane-system/utils"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func UploadFile(c *gin.Context) {
@@ -42,11 +47,12 @@ func UploadFile(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	var uploadedFiles []models.ProgramFile
 
-	var program models.Program
-	if err := database.DB.First(&program, programID).Error; err != nil {
+	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, uint(programID))
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
 	}
+	program := targetProgram
 
 	var productionLine models.ProductionLine
 	if err := database.DB.First(&productionLine, program.ProductionLineID).Error; err != nil {
@@ -60,9 +66,10 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
+	var latestUploadedFile models.ProgramFile
 	var existingVersion models.ProgramVersion
-	err = database.DB.Where("program_id = ? AND version = ?", programID, version).First(&existingVersion).Error
-	isNewVersion := err != nil
+	versionQueryErr := database.DB.Where("program_id = ? AND version = ?", targetProgramID, version).Order("created_at DESC").First(&existingVersion).Error
+	isNewVersion := versionQueryErr != nil
 
 	for _, fileHeader := range files {
 		programPath := utils.GenerateProgramPath(
@@ -97,7 +104,7 @@ func UploadFile(c *gin.Context) {
 		}
 
 		programFile := models.ProgramFile{
-			ProgramID:   uint(programID),
+			ProgramID:   targetProgramID,
 			FileName:    fileHeader.Filename,
 			FilePath:    relativePath,
 			FileSize:    fileHeader.Size,
@@ -113,28 +120,45 @@ func UploadFile(c *gin.Context) {
 		}
 
 		uploadedFiles = append(uploadedFiles, programFile)
+		latestUploadedFile = programFile
+	}
 
-		if isNewVersion || len(files) > 1 {
-			programVersion := models.ProgramVersion{
-				ProgramID:  uint(programID),
-				Version:    version,
-				FileID:     programFile.ID,
-				UploadedBy: userID.(uint),
-				ChangeLog:  description,
-				IsCurrent:  true,
-			}
+	database.DB.Model(&models.ProgramVersion{}).
+		Where("program_id = ?", targetProgramID).
+		Update("is_current", false)
 
-			if isNewVersion {
-				database.DB.Model(&models.ProgramVersion{}).
-					Where("program_id = ?", programID).
-					Update("is_current", false)
-			}
+	if isNewVersion {
+		if versionQueryErr != nil && versionQueryErr != gorm.ErrRecordNotFound {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询版本信息失败"})
+			return
+		}
 
-			database.DB.Create(&programVersion)
+		programVersion := models.ProgramVersion{
+			ProgramID:  targetProgramID,
+			Version:    version,
+			FileID:     latestUploadedFile.ID,
+			UploadedBy: userID.(uint),
+			ChangeLog:  description,
+			IsCurrent:  true,
+		}
+		if err := database.DB.Create(&programVersion).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "版本记录创建失败"})
+			return
+		}
+	} else {
+		existingVersion.FileID = latestUploadedFile.ID
+		existingVersion.UploadedBy = userID.(uint)
+		existingVersion.IsCurrent = true
+		if strings.TrimSpace(description) != "" {
+			existingVersion.ChangeLog = description
+		}
+		if err := database.DB.Save(&existingVersion).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "版本记录更新失败"})
+			return
 		}
 	}
 
-	database.DB.Model(&models.Program{}).Where("id = ?", programID).Update("version", version)
+	database.DB.Model(&models.Program{}).Where("id = ?", targetProgramID).Update("version", version)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "文件上传成功",
@@ -165,10 +189,16 @@ func DownloadFile(c *gin.Context) {
 }
 
 func GetProgramFiles(c *gin.Context) {
+	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, parseUintParam(c.Param("program_id")))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		return
+	}
+
 	var files []models.ProgramFile
 	if err := database.DB.
 		Preload("Uploader").
-		Where("program_id = ?", c.Param("program_id")).
+		Where("program_id = ?", targetProgramID).
 		Order("version DESC, created_at DESC").
 		Find(&files).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件失败"})
@@ -178,7 +208,7 @@ func GetProgramFiles(c *gin.Context) {
 	var versions []models.ProgramVersion
 	if err := database.DB.
 		Preload("Uploader").
-		Where("program_id = ?", c.Param("program_id")).
+		Where("program_id = ?", targetProgramID).
 		Order("created_at DESC").
 		Find(&versions).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询版本失败"})
@@ -186,10 +216,13 @@ func GetProgramFiles(c *gin.Context) {
 	}
 
 	versionFiles := make(map[string][]models.ProgramFile)
-	versionMap := make(map[string]*models.ProgramVersion)
+	versionMap := make(map[string]models.ProgramVersion)
 
 	for _, version := range versions {
-		versionMap[version.Version] = &version
+		existing, ok := versionMap[version.Version]
+		if !ok || version.CreatedAt.After(existing.CreatedAt) {
+			versionMap[version.Version] = version
+		}
 		versionFiles[version.Version] = []models.ProgramFile{}
 	}
 
@@ -209,13 +242,13 @@ func GetProgramFiles(c *gin.Context) {
 		}
 		processedVersions[versionName] = true
 
-		versionInfo := versionMap[versionName]
+		versionInfo, hasVersionInfo := versionMap[versionName]
 		var createdAt time.Time
 		var uploader *models.User
 		changeLog := ""
 		isCurrent := false
 
-		if versionInfo != nil {
+		if hasVersionInfo {
 			createdAt = versionInfo.CreatedAt
 			uploader = &versionInfo.Uploader
 			changeLog = versionInfo.ChangeLog
@@ -226,7 +259,13 @@ func GetProgramFiles(c *gin.Context) {
 			changeLog = files[0].Description
 		}
 
+		versionID := uint(0)
+		if hasVersionInfo {
+			versionID = versionInfo.ID
+		}
+
 		versionData := map[string]interface{}{
+			"id":         versionID,
 			"version":    versionName,
 			"change_log": changeLog,
 			"is_current": isCurrent,
@@ -262,9 +301,15 @@ func GetProgramFiles(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"program_id":      targetProgram.ID,
 		"versions":       result,
 		"total_versions": len(result),
 	})
+}
+
+func parseUintParam(value string) uint {
+	parsed, _ := strconv.ParseUint(value, 10, 64)
+	return uint(parsed)
 }
 
 func DeleteFile(c *gin.Context) {
@@ -324,6 +369,276 @@ func CreateVersion(c *gin.Context) {
 	c.JSON(http.StatusCreated, version)
 }
 
+func UpdateVersion(c *gin.Context) {
+	var version models.ProgramVersion
+	if err := database.DB.First(&version, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "版本不存在"})
+		return
+	}
+
+	var payload struct {
+		ChangeLog string `json:"change_log"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := database.DB.Model(&version).Update("change_log", payload.ChangeLog).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+		return
+	}
+
+	version.ChangeLog = payload.ChangeLog
+	c.JSON(http.StatusOK, version)
+}
+
+type batchUploadProgramFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Path string `json:"path"`
+}
+
+type batchUploadProgram struct {
+	Name  string                  `json:"name"`
+	Files []batchUploadProgramFile `json:"files"`
+}
+
+type batchUploadWorkstation struct {
+	Name     string              `json:"name"`
+	Programs []batchUploadProgram `json:"programs"`
+}
+
+type batchUploadPreview struct {
+	Workstations []batchUploadWorkstation `json:"workstations"`
+	TotalPrograms int                     `json:"total_programs"`
+	TotalFiles    int                     `json:"total_files"`
+	TempDir       string                  `json:"temp_dir"`
+}
+
+type batchImportMapping struct {
+	WorkstationName string `json:"workstation_name"`
+	ProductionLineID *uint `json:"production_line_id"`
+	VehicleModelID   *uint `json:"vehicle_model_id"`
+}
+
+type batchImportTaskStatus struct {
+	Status      string  `json:"status"`
+	Total       int     `json:"total"`
+	Processed   int     `json:"processed"`
+	Success     int     `json:"success"`
+	Failed      int     `json:"failed"`
+	Progress    float64 `json:"progress"`
+	CurrentItem string  `json:"current_item"`
+	ErrorMessage string `json:"error_message"`
+}
+
+var (
+	batchTaskMu sync.RWMutex
+	batchTaskSeq int64 = 1
+	batchTasks = map[int64]*batchImportTaskStatus{}
+)
+
+func BatchUploadPrograms(c *gin.Context) {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传zip文件"})
+		return
+	}
+
+	src, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "读取上传文件失败"})
+		return
+	}
+	defer src.Close()
+
+	tempDir, err := os.MkdirTemp("", "program-batch-*")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败"})
+		return
+	}
+
+	zipPath := filepath.Join(tempDir, "batch.zip")
+	dst, err := os.Create(zipPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败"})
+		return
+	}
+	if _, err = io.Copy(dst, src); err != nil {
+		dst.Close()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存上传文件失败"})
+		return
+	}
+	dst.Close()
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "zip文件格式无效"})
+		return
+	}
+	defer zr.Close()
+
+	workstations := map[string]map[string][]batchUploadProgramFile{}
+	totalFiles := 0
+
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(f.Name), "/"), "/")
+		if len(parts) < 3 {
+			continue
+		}
+		workstation := strings.TrimSpace(parts[0])
+		program := strings.TrimSpace(parts[1])
+		if workstation == "" || program == "" {
+			continue
+		}
+
+		if _, ok := workstations[workstation]; !ok {
+			workstations[workstation] = map[string][]batchUploadProgramFile{}
+		}
+		workstations[workstation][program] = append(workstations[workstation][program], batchUploadProgramFile{
+			Name: filepath.Base(f.Name),
+			Size: int64(f.UncompressedSize64),
+			Path: filepath.ToSlash(f.Name),
+		})
+		totalFiles++
+	}
+
+	preview := batchUploadPreview{TempDir: tempDir, TotalFiles: totalFiles}
+	for wsName, programs := range workstations {
+		ws := batchUploadWorkstation{Name: wsName}
+		for progName, files := range programs {
+			ws.Programs = append(ws.Programs, batchUploadProgram{Name: progName, Files: files})
+			preview.TotalPrograms++
+		}
+		sort.Slice(ws.Programs, func(i, j int) bool { return ws.Programs[i].Name < ws.Programs[j].Name })
+		preview.Workstations = append(preview.Workstations, ws)
+	}
+	sort.Slice(preview.Workstations, func(i, j int) bool { return preview.Workstations[i].Name < preview.Workstations[j].Name })
+
+	previewBytes, _ := json.Marshal(preview)
+	_ = os.WriteFile(filepath.Join(tempDir, "preview.json"), previewBytes, 0644)
+
+	c.JSON(http.StatusOK, preview)
+}
+
+func BatchImportPrograms(c *gin.Context) {
+	var payload struct {
+		TempDir  string               `json:"temp_dir"`
+		Mappings []batchImportMapping `json:"mappings"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	previewPath := filepath.Join(payload.TempDir, "preview.json")
+	previewRaw, err := os.ReadFile(previewPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "批量解析结果不存在，请重新上传"})
+		return
+	}
+
+	var preview batchUploadPreview
+	if err := json.Unmarshal(previewRaw, &preview); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "批量解析结果损坏"})
+		return
+	}
+
+	mappingByName := make(map[string]batchImportMapping, len(payload.Mappings))
+	for _, m := range payload.Mappings {
+		mappingByName[m.WorkstationName] = m
+	}
+
+	batchTaskMu.Lock()
+	taskID := batchTaskSeq
+	batchTaskSeq++
+	status := &batchImportTaskStatus{
+		Status: "processing",
+		Total:  preview.TotalPrograms,
+	}
+	batchTasks[taskID] = status
+	batchTaskMu.Unlock()
+
+	go runBatchImportTask(status, preview, mappingByName)
+
+	c.JSON(http.StatusOK, gin.H{"task_id": taskID})
+}
+
+func runBatchImportTask(status *batchImportTaskStatus, preview batchUploadPreview, mappingByName map[string]batchImportMapping) {
+	for _, ws := range preview.Workstations {
+		mapping, ok := mappingByName[ws.Name]
+		if !ok || mapping.ProductionLineID == nil {
+			for range ws.Programs {
+				status.Processed++
+				status.Failed++
+				status.Progress = float64(status.Processed) * 100 / float64(max(status.Total, 1))
+			}
+			continue
+		}
+
+		for _, prog := range ws.Programs {
+			status.CurrentItem = fmt.Sprintf("%s/%s", ws.Name, prog.Name)
+			code := fmt.Sprintf("BATCH-%d-%d", time.Now().Unix(), status.Processed+1)
+
+			program := models.Program{
+				Name:             prog.Name,
+				Code:             code,
+				ProductionLineID: *mapping.ProductionLineID,
+				Status:           "in_progress",
+			}
+			if mapping.VehicleModelID != nil {
+				program.VehicleModelID = *mapping.VehicleModelID
+			}
+
+			if err := database.DB.Create(&program).Error; err != nil {
+				status.Failed++
+			} else {
+				status.Success++
+			}
+			status.Processed++
+			status.Progress = float64(status.Processed) * 100 / float64(max(status.Total, 1))
+		}
+	}
+
+	if status.Failed > 0 && status.Success == 0 {
+		status.Status = "failed"
+		status.ErrorMessage = "全部导入失败，请检查映射和数据"
+		return
+	}
+
+	status.Status = "completed"
+	status.Progress = 100
+}
+
+func GetTaskStatus(c *gin.Context) {
+	taskID, err := strconv.ParseInt(c.Param("task_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "任务ID格式错误"})
+		return
+	}
+
+	batchTaskMu.RLock()
+	status, ok := batchTasks[taskID]
+	batchTaskMu.RUnlock()
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, status)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func ActivateVersion(c *gin.Context) {
 	var version models.ProgramVersion
 	if err := database.DB.First(&version, c.Param("id")).Error; err != nil {
@@ -344,18 +659,17 @@ func ActivateVersion(c *gin.Context) {
 }
 
 func DownloadProgramLatestVersion(c *gin.Context) {
-	programID := c.Param("program_id")
-
-	var program models.Program
-	if err := database.DB.First(&program, programID).Error; err != nil {
+	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, parseUintParam(c.Param("program_id")))
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
 	}
+	program := targetProgram
 
 	var files []models.ProgramFile
 	if err := database.DB.
 		Preload("Uploader").
-		Where("program_id = ?", programID).
+		Where("program_id = ?", targetProgramID).
 		Order("version DESC, created_at DESC").
 		Find(&files).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件失败"})
@@ -382,7 +696,7 @@ func DownloadProgramLatestVersion(c *gin.Context) {
 
 	programCode := program.Code
 	if programCode == "" {
-		programCode = programID
+		programCode = strconv.FormatUint(uint64(targetProgramID), 10)
 	}
 	zipFileName := fmt.Sprintf("%s_%s.zip", programCode, latestVersion)
 	createAndDownloadZip(c, latestFiles, zipFileName)
@@ -397,16 +711,17 @@ func DownloadVersionFiles(c *gin.Context) {
 		return
 	}
 
-	var program models.Program
-	if err := database.DB.First(&program, programID).Error; err != nil {
+	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, parseUintParam(programID))
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
 		return
 	}
+	program := targetProgram
 
 	var files []models.ProgramFile
 	if err := database.DB.
 		Preload("Uploader").
-		Where("program_id = ? AND version = ?", programID, version).
+		Where("program_id = ? AND version = ?", targetProgramID, version).
 		Order("created_at DESC").
 		Find(&files).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件失败"})
@@ -420,7 +735,7 @@ func DownloadVersionFiles(c *gin.Context) {
 
 	programCode := program.Code
 	if programCode == "" {
-		programCode = programID
+		programCode = strconv.FormatUint(uint64(targetProgramID), 10)
 	}
 	zipFileName := fmt.Sprintf("%s_%s.zip", programCode, version)
 	createAndDownloadZip(c, files, zipFileName)

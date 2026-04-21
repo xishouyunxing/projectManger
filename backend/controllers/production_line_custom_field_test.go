@@ -88,7 +88,7 @@ func seedProductionLineCustomFieldAuthData(t *testing.T, db *gorm.DB) (string, m
 		t.Fatalf("create process: %v", err)
 	}
 
-	line := models.ProductionLine{Name: "产线A", Code: "LINE-001", Type: "upper", Status: "active", ProcessID: process.ID}
+	line := models.ProductionLine{Name: "产线A", Code: "LINE-001", Type: "upper", Status: "active", ProcessID: &process.ID}
 	if err := db.Create(&line).Error; err != nil {
 		t.Fatalf("create production line: %v", err)
 	}
