@@ -13,14 +13,15 @@ import {
   Popconfirm,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import api from '../services/api';
+import api, { extractPagedListData } from '../services/api';
 
 const { Title } = Typography;
 const { TextArea } = Input;
 
 const DepartmentManagement = () => {
-  const [departments, setDepartments] = useState([]);
+  const [departments, setDepartments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [modalVisible, setModalVisible] = useState(false);
   const [currentDepartment, setCurrentDepartment] = useState<any>(null);
   const [form] = Form.useForm();
@@ -29,11 +30,22 @@ const DepartmentManagement = () => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
-      const response = await api.get('/departments');
-      setDepartments(response.data);
+      const response = await api.get('/departments', { params: { page, page_size: pageSize } });
+      const departmentsPaged = extractPagedListData(response.data);
+      const fallbackToPreviousPage = page > 1 && departmentsPaged.items.length === 0;
+      if (fallbackToPreviousPage) {
+        await loadData(page - 1, pageSize);
+        return;
+      }
+      setDepartments(departmentsPaged.items);
+      setTablePagination({
+        current: departmentsPaged.page || page,
+        pageSize: departmentsPaged.pageSize || pageSize,
+        total: departmentsPaged.total,
+      });
     } catch (error) {
       console.error('Failed to load departments:', error);
       message.error('加载部门列表失败');
@@ -58,7 +70,7 @@ const DepartmentManagement = () => {
     try {
       await api.delete(`/departments/${id}`);
       message.success('删除成功');
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to delete department:', error);
       message.error('删除失败');
@@ -75,7 +87,7 @@ const DepartmentManagement = () => {
         message.success('创建成功');
       }
       setModalVisible(false);
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to submit department:', error);
       message.error('操作失败');
@@ -190,6 +202,10 @@ const DepartmentManagement = () => {
           rowKey="id"
           loading={loading}
           pagination={{
+            current: tablePagination.current,
+            pageSize: tablePagination.pageSize,
+            total: tablePagination.total,
+            onChange: (page, pageSize) => loadData(page, pageSize),
             showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
             style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
           }}

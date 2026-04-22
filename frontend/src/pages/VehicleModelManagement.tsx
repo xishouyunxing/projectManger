@@ -19,16 +19,17 @@ import {
   Tooltip,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, EyeOutlined, CarOutlined, ApartmentOutlined, SearchOutlined, EditOutlined, AppstoreOutlined } from '@ant-design/icons';
-import api from '../services/api';
+import api, { extractListData, extractPagedListData } from '../services/api';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 const VehicleModelManagement = () => {
-  const [vehicleModels, setVehicleModels] = useState([]);
-  const [productionLines, setProductionLines] = useState([]);
-  const [programs, setPrograms] = useState([]);
+  const [vehicleModels, setVehicleModels] = useState<any[]>([]);
+  const [productionLines, setProductionLines] = useState<any[]>([]);
+  const [programs, setPrograms] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [modalVisible, setModalVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [programDetailVisible, setProgramDetailVisible] = useState(false);
@@ -83,21 +84,43 @@ const VehicleModelManagement = () => {
     setFilterSeries(null);
     setSearchKeyword('');
     setFilterDateRange([null, null]);
+    loadData(1, tablePagination.pageSize);
   };
+
+  useEffect(() => {
+    loadData(1, tablePagination.pageSize);
+  }, [filterSeries]);
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
       const [modelsRes, linesRes] = await Promise.all([
-        api.get('/vehicle-models'),
+        api.get('/vehicle-models', {
+          params: {
+            page,
+            page_size: pageSize,
+            ...(filterSeries ? { series: filterSeries } : {}),
+          },
+        }),
         api.get('/production-lines'),
       ]);
-      setVehicleModels(modelsRes.data);
-      setProductionLines(linesRes.data);
+      const modelsPaged = extractPagedListData(modelsRes.data);
+      const fallbackToPreviousPage = page > 1 && modelsPaged.items.length === 0;
+      if (fallbackToPreviousPage) {
+        await loadData(page - 1, pageSize);
+        return;
+      }
+      setVehicleModels(modelsPaged.items);
+      setTablePagination({
+        current: modelsPaged.page || page,
+        pageSize: modelsPaged.pageSize || pageSize,
+        total: modelsPaged.total,
+      });
+      setProductionLines(extractListData(linesRes.data));
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -121,7 +144,7 @@ const VehicleModelManagement = () => {
     try {
       await api.delete(`/vehicle-models/${id}`);
       message.success('删除成功');
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to delete:', error);
     }
@@ -137,7 +160,7 @@ const VehicleModelManagement = () => {
         message.success('创建成功');
       }
       setModalVisible(false);
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to submit:', error);
     }
@@ -377,6 +400,10 @@ const VehicleModelManagement = () => {
           rowKey="id"
           loading={loading}
           pagination={{
+            current: tablePagination.current,
+            pageSize: tablePagination.pageSize,
+            total: tablePagination.total,
+            onChange: (page, pageSize) => loadData(page, pageSize),
             showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
             style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
           }}

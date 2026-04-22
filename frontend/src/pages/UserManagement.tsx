@@ -16,7 +16,7 @@ import {
   Tooltip,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, LockOutlined, UserOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons';
-import api from '../services/api';
+import api, { extractListData, extractPagedListData } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 const { Title } = Typography;
@@ -24,9 +24,10 @@ const { Title } = Typography;
 const UserManagement = () => {
   const [searchParams] = useSearchParams();
   const selectedUserId = Number(searchParams.get('id') || 0);
-  const [users, setUsers] = useState([]);
-  const [departments, setDepartments] = useState([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [modalVisible, setModalVisible] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [form] = Form.useForm();
@@ -50,15 +51,28 @@ const UserManagement = () => {
     }
   }, [searchParams]);
 
-  const loadData = async () => {
+  const buildUserQueryParams = (page = tablePagination.current, pageSize = tablePagination.pageSize) => ({
+    page,
+    page_size: pageSize,
+    ...(filterDepartment ? { department_id: filterDepartment } : {}),
+    ...(filterRole ? { role: filterRole } : {}),
+  });
+
+  const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
       const [usersRes, departmentsRes] = await Promise.all([
-        api.get('/users'),
+        api.get('/users', { params: buildUserQueryParams(page, pageSize) }),
         api.get('/departments'),
       ]);
-      setUsers(usersRes.data);
-      setDepartments(departmentsRes.data);
+      const usersPaged = extractPagedListData(usersRes.data);
+      setUsers(usersPaged.items);
+      setTablePagination({
+        current: usersPaged.page || page,
+        pageSize: usersPaged.pageSize || pageSize,
+        total: usersPaged.total,
+      });
+      setDepartments(extractListData(departmentsRes.data));
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -66,11 +80,22 @@ const UserManagement = () => {
     }
   };
 
-  const loadUsers = async () => {
+  const loadUsers = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
-      const response = await api.get('/users');
-      setUsers(response.data);
+      const response = await api.get('/users', { params: buildUserQueryParams(page, pageSize) });
+      const usersPaged = extractPagedListData(response.data);
+      const fallbackToPreviousPage = page > 1 && usersPaged.items.length === 0;
+      if (fallbackToPreviousPage) {
+        await loadUsers(page - 1, pageSize);
+        return;
+      }
+      setUsers(usersPaged.items);
+      setTablePagination({
+        current: usersPaged.page || page,
+        pageSize: usersPaged.pageSize || pageSize,
+        total: usersPaged.total,
+      });
     } catch (error) {
       console.error('Failed to load users:', error);
     } finally {
@@ -94,7 +119,7 @@ const UserManagement = () => {
     try {
       await api.delete(`/users/${id}`);
       message.success('删除成功');
-      loadUsers();
+      loadUsers(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to delete:', error);
     }
@@ -120,7 +145,7 @@ const UserManagement = () => {
         message.success('创建成功');
       }
       setModalVisible(false);
-      loadUsers();
+      loadUsers(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to submit:', error);
     }
@@ -133,7 +158,12 @@ const UserManagement = () => {
     setFilterRole(null);
     setFilterStatus(null);
     setFilterDateRange([null, null]);
+    loadUsers(1, tablePagination.pageSize);
   };
+
+  useEffect(() => {
+    loadUsers(1, tablePagination.pageSize);
+  }, [filterDepartment, filterRole]);
 
   // 筛选后的用户列表
   const filteredUsers = users.filter((user: any) => {
@@ -453,6 +483,10 @@ const UserManagement = () => {
           rowKey="id"
           loading={loading}
           pagination={{
+            current: tablePagination.current,
+            pageSize: tablePagination.pageSize,
+            total: tablePagination.total,
+            onChange: (page, pageSize) => loadUsers(page, pageSize),
             showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
             style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
           }}

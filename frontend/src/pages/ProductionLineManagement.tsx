@@ -15,7 +15,7 @@ import {
   ConfigProvider,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
-import api from '../services/api';
+import api, { extractPagedListData } from '../services/api';
 import ProductionLineCustomFieldManager from '../components/production-line/ProductionLineCustomFieldManager';
 
 const { Title } = Typography;
@@ -24,8 +24,9 @@ const { TextArea } = Input;
 const ProductionLineManagement = () => {
   const [searchParams] = useSearchParams();
   const selectedLineId = Number(searchParams.get('id') || 0);
-  const [productionLines, setProductionLines] = useState([]);
+  const [productionLines, setProductionLines] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [modalVisible, setModalVisible] = useState(false);
   const [customFieldManagerVisible, setCustomFieldManagerVisible] = useState(false);
   const [currentLine, setCurrentLine] = useState<any>(null);
@@ -48,11 +49,29 @@ const ProductionLineManagement = () => {
     }
   }, [searchParams]);
 
-  const loadData = async () => {
+  const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
-      const linesRes = await api.get('/production-lines');
-      setProductionLines(linesRes.data);
+      const linesRes = await api.get('/production-lines', {
+        params: {
+          page,
+          page_size: pageSize,
+          ...(filterType ? { type: filterType } : {}),
+          ...(filterStatus ? { status: filterStatus } : {}),
+        },
+      });
+      const linesPaged = extractPagedListData(linesRes.data);
+      const fallbackToPreviousPage = page > 1 && linesPaged.items.length === 0;
+      if (fallbackToPreviousPage) {
+        await loadData(page - 1, pageSize);
+        return;
+      }
+      setProductionLines(linesPaged.items);
+      setTablePagination({
+        current: linesPaged.page || page,
+        pageSize: linesPaged.pageSize || pageSize,
+        total: linesPaged.total,
+      });
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -81,7 +100,7 @@ const ProductionLineManagement = () => {
     try {
       await api.delete(`/production-lines/${id}`);
       message.success('删除成功');
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to delete:', error);
     }
@@ -97,7 +116,7 @@ const ProductionLineManagement = () => {
         message.success('创建成功');
       }
       setModalVisible(false);
-      loadData();
+      loadData(tablePagination.current, tablePagination.pageSize);
     } catch (error) {
       console.error('Failed to submit:', error);
     }
@@ -109,7 +128,12 @@ const ProductionLineManagement = () => {
     setFilterType(null);
     setFilterStatus(null);
     setFilterDateRange([null, null]);
+    loadData(1, tablePagination.pageSize);
   };
+
+  useEffect(() => {
+    loadData(1, tablePagination.pageSize);
+  }, [filterType, filterStatus]);
 
   // 筛选后的生产线列表
   const filteredProductionLines = productionLines.filter((line: any) => {
@@ -397,6 +421,10 @@ const ProductionLineManagement = () => {
           rowKey="id"
           loading={loading}
           pagination={{
+            current: tablePagination.current,
+            pageSize: tablePagination.pageSize,
+            total: tablePagination.total,
+            onChange: (page, pageSize) => loadData(page, pageSize),
             showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
             style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
           }}
