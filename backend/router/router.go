@@ -80,6 +80,7 @@ func SetupRouter() *gin.Engine {
 		programs := protected.Group("/programs")
 		{
 			programs.GET("", controllers.GetPrograms)
+			programs.GET("/export/excel", controllers.ExportProgramsExcel)
 			programs.GET("/:id", controllers.GetProgram)
 			programs.POST("", controllers.CreateProgram)
 			programs.PUT("/:id", controllers.UpdateProgram)

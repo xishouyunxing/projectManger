@@ -15,6 +15,7 @@ import {
   Row,
   Col,
   Switch,
+  Alert,
 } from 'antd';
 import {
   PlusOutlined,
@@ -61,6 +62,7 @@ const FileIgnoreList = () => {
   const [logsModalVisible, setLogsModalVisible] = useState(false);
   const [currentRule, setCurrentRule] = useState<FileIgnoreRule | null>(null);
   const [logs, setLogs] = useState<IgnoreLog[]>([]);
+  const [featureSupported, setFeatureSupported] = useState(true);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -74,11 +76,18 @@ const FileIgnoreList = () => {
         api.get('/files/ignore'),
         api.get('/programs'),
       ]);
+      setFeatureSupported(true);
       setRules(rulesRes.data);
       setPrograms(programsRes.data);
-    } catch (error) {
-      console.error('Failed to load data:', error);
-      message.error('加载数据失败');
+    } catch (error: any) {
+      if (error?.response?.status === 404 || error?.response?.status === 405) {
+        setFeatureSupported(false);
+        setRules([]);
+        setPrograms([]);
+      } else {
+        console.error('Failed to load data:', error);
+        message.error('加载数据失败');
+      }
     } finally {
       setLoading(false);
     }
@@ -345,6 +354,14 @@ const FileIgnoreList = () => {
 
   return (
     <div style={{ padding: '0 8px', maxWidth: '1024px', margin: '0 auto', fontFamily: '"WenQuanYi Zen Hei", Inter, Manrope, sans-serif' }}>
+      {!featureSupported && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginTop: 24 }}
+          message="当前环境未启用文件忽略规则能力"
+        />
+      )}
       {/* 顶部标题区 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '24px' }}>
         <div>

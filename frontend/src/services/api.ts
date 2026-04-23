@@ -43,4 +43,24 @@ api.interceptors.response.use(
   },
 );
 
+export const extractListData = <T = any>(payload: any): T[] => {
+  if (Array.isArray(payload)) {
+    return payload as T[];
+  }
+  if (Array.isArray(payload?.items)) {
+    return payload.items as T[];
+  }
+  return [];
+};
+
+export const extractPagedListData = <T = any>(payload: any) => {
+  const items = extractListData<T>(payload);
+  return {
+    items,
+    total: typeof payload?.total === 'number' ? payload.total : items.length,
+    page: typeof payload?.page === 'number' ? payload.page : 1,
+    pageSize: typeof payload?.page_size === 'number' ? payload.page_size : items.length,
+  };
+};
+
 export default api;

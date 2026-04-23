@@ -21,7 +21,12 @@ type productionLineCustomFieldRequest struct {
 }
 
 func GetProductionLineCustomFields(c *gin.Context) {
-	if _, err := findProductionLine(c.Param("id")); err != nil {
+	lineID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "生产线ID格式错误"})
+		return
+	}
+	if _, err := findProductionLine(lineID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})
 		} else {
@@ -31,7 +36,7 @@ func GetProductionLineCustomFields(c *gin.Context) {
 	}
 
 	var fields []models.ProductionLineCustomField
-	if err := database.DB.Where("production_line_id = ?", c.Param("id")).Order("sort_order asc, id asc").Find(&fields).Error; err != nil {
+	if err := database.DB.Where("production_line_id = ?", lineID).Order("sort_order asc, id asc").Find(&fields).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
@@ -40,7 +45,13 @@ func GetProductionLineCustomFields(c *gin.Context) {
 }
 
 func CreateProductionLineCustomField(c *gin.Context) {
-	line, err := findProductionLine(c.Param("id"))
+	lineID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "生产线ID格式错误"})
+		return
+	}
+
+	line, err := findProductionLine(lineID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})
@@ -83,7 +94,18 @@ func CreateProductionLineCustomField(c *gin.Context) {
 }
 
 func UpdateProductionLineCustomField(c *gin.Context) {
-	if _, err := findProductionLine(c.Param("id")); err != nil {
+	lineID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "生产线ID格式错误"})
+		return
+	}
+	fieldID, err := parseUintParam(c.Param("fieldId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "字段ID格式错误"})
+		return
+	}
+
+	if _, err := findProductionLine(lineID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})
 		} else {
@@ -92,7 +114,7 @@ func UpdateProductionLineCustomField(c *gin.Context) {
 		return
 	}
 
-	field, err := findProductionLineCustomField(c.Param("id"), c.Param("fieldId"))
+	field, err := findProductionLineCustomField(lineID, fieldID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "自定义字段不存在"})
@@ -141,7 +163,18 @@ func UpdateProductionLineCustomField(c *gin.Context) {
 }
 
 func DeleteProductionLineCustomField(c *gin.Context) {
-	if _, err := findProductionLine(c.Param("id")); err != nil {
+	lineID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "生产线ID格式错误"})
+		return
+	}
+	fieldID, err := parseUintParam(c.Param("fieldId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "字段ID格式错误"})
+		return
+	}
+
+	if _, err := findProductionLine(lineID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})
 		} else {
@@ -150,7 +183,7 @@ func DeleteProductionLineCustomField(c *gin.Context) {
 		return
 	}
 
-	field, err := findProductionLineCustomField(c.Param("id"), c.Param("fieldId"))
+	field, err := findProductionLineCustomField(lineID, fieldID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "自定义字段不存在"})
@@ -278,7 +311,7 @@ func validateSelectFieldOptions(optionsJSON string) ([]string, error) {
 	return options, nil
 }
 
-func findProductionLine(lineID string) (models.ProductionLine, error) {
+func findProductionLine(lineID uint) (models.ProductionLine, error) {
 	var line models.ProductionLine
 	if err := database.DB.First(&line, lineID).Error; err != nil {
 		return models.ProductionLine{}, err
@@ -286,7 +319,7 @@ func findProductionLine(lineID string) (models.ProductionLine, error) {
 	return line, nil
 }
 
-func findProductionLineCustomField(lineID string, fieldID string) (models.ProductionLineCustomField, error) {
+func findProductionLineCustomField(lineID uint, fieldID uint) (models.ProductionLineCustomField, error) {
 	var field models.ProductionLineCustomField
 	if err := database.DB.Where("id = ? AND production_line_id = ?", fieldID, lineID).First(&field).Error; err != nil {
 		return models.ProductionLineCustomField{}, err

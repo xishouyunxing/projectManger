@@ -57,8 +57,14 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		if claims.Role != "" && claims.Role != user.Role {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌角色与当前用户角色不一致"})
+			c.Abort()
+			return
+		}
+
 		c.Set("user_id", claims.UserID)
-		c.Set("user_role", claims.Role)
+		c.Set("user_role", user.Role)
 		c.Set("user", user)
 		c.Next()
 	}

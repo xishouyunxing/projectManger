@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { TablePaginationConfig } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import {
   Table,
@@ -22,8 +23,7 @@ import {
   Statistic,
   Drawer,
   Dropdown,
-  DatePicker,
-  ConfigProvider,
+  Pagination,
 } from 'antd';
 import {
   PlusOutlined,
@@ -39,11 +39,8 @@ import {
   LoadingOutlined,
   EditOutlined,
   UserOutlined,
-  FileExcelOutlined,
   LinkOutlined,
   SettingOutlined,
-  SearchOutlined,
-  SlidersOutlined,
   AppstoreOutlined,
   CloseOutlined,
   FileTextOutlined,
@@ -51,319 +48,46 @@ import {
 } from '@ant-design/icons';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
-import ProgramCustomFieldFilter from '../components/program/ProgramCustomFieldFilter';
+import ProgramHeader from './program-management/ProgramHeader';
+import ProgramFilterPanel from './program-management/ProgramFilterPanel';
+import { useProgramManagementData } from './program-management/useProgramManagementData';
+import {
+  buildBaseProgramPayload,
+  buildCustomFieldValuesPayload,
+  buildPropertyDraftSnapshot,
+  formatFileSize,
+  getFileTypeLabel,
+  getProgramCustomFieldSummaries,
+  getProgramCustomFieldValue,
+  getVersionSelectionKey,
+  normalizeCustomFieldValues,
+  parseCustomFieldOptions,
+} from './program-management/utils';
+import type {
+  BatchImportPreview,
+  BatchImportStatus,
+  Program,
+  ProgramCustomFieldDefinition,
+  ProgramFormValues,
+  ProgramMapping,
+  WorkstationInfo,
+  WorkstationMapping,
+} from './program-management/types';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Step } = Steps;
 
-// ---- TypeScript 接口定义 ----
-interface ProductionLine {
-  id: number;
-  name: string;
-}
-
-interface VehicleModel {
-  id: number;
-  name: string;
-}
-
-interface ProgramFile {
-  id: number;
-  file_name: string;
-  file_size: number;
-  created_at: string;
-  file_exists?: boolean;
-  uploader?: { name: string };
-}
-
-interface ProgramVersion {
-  id: number;
-  version: string;
-  is_current: boolean;
-  change_log?: string;
-  created_at: string;
-  file_count?: number;
-  files?: ProgramFile[];
-  uploader?: { name: string };
-}
-
-interface Program {
-  id: number;
-  name: string;
-  code: string;
-  version?: string;
-  status: string;
-  production_line_id: number;
-  vehicle_model_id?: number;
-  production_line?: ProductionLine;
-  vehicle_model?: VehicleModel;
-  description?: string;
-  created_at: string;
-  editing_by?: number | null;
-  editing_user?: { id: number; name: string } | null;
-  custom_field_values?: ProgramListCustomFieldValue[] | Record<string, unknown>;
-  own_version_count?: number;
-  own_file_count?: number;
-  mapping_info?: {
-    mapping_id: number;
-    parent_program_id: number;
-    parent_program_name: string;
-    parent_program_code: string;
-  } | null;
-}
-
-type ProgramMapping = {
-  id: number;
-  parent_program: Program;
-  child_program: Program;
-};
-
-interface ProgramCustomFieldDefinition {
-  id: number;
-  name: string;
-  field_type: 'text' | 'select';
-  options_json: string;
-  sort_order: number;
-  enabled: boolean;
-}
-
-interface ProgramListCustomFieldValue {
-  field_id: number;
-  field_name: string;
-  field_type: 'text' | 'select';
-  sort_order: number;
-  value: string;
-}
-
-// 批量导入相关接口
-interface WorkstationInfo {
-  name: string;
-  programs: {
-    name: string;
-    files: { name: string; size: number; path: string }[];
-  }[];
-}
-
-interface BatchImportPreview {
-  workstations: WorkstationInfo[];
-  total_programs: number;
-  total_files: number;
-  temp_dir: string;
-}
-
-interface WorkstationMapping {
-  workstation_name: string;
-  production_line_id: number | null;
-  vehicle_model_id: number | null;
-}
-
-interface BatchImportStatus {
-  status: 'idle' | 'processing' | 'completed' | 'failed';
-  total: number;
-  processed: number;
-  success: number;
-  failed: number;
-  progress: number;
-  current_item: string;
-  error_message: string;
-}
-
-interface ProgramFormValues {
-  name?: string;
-  code?: string;
-  status?: string;
-  production_line_id?: number;
-  vehicle_model_id?: number;
-  description?: string;
-  custom_field_values?: Record<string, string>;
-}
-
-const buildEnabledCustomFields = (data: unknown): ProgramCustomFieldDefinition[] => {
-  if (!Array.isArray(data)) {
-    return [];
-  }
-
-  return data
-    .filter(
-      (field): field is ProgramCustomFieldDefinition =>
-        typeof field === 'object' &&
-        field !== null &&
-        Boolean((field as ProgramCustomFieldDefinition).enabled),
-    )
-    .sort((a, b) => a.sort_order - b.sort_order);
-};
-
-const normalizeCustomFieldValues = (
-  values: Program['custom_field_values'],
-): Record<string, string> => {
-  if (Array.isArray(values)) {
-    return values.reduce<Record<string, string>>((result, field) => {
-      if (typeof field.value === 'string') {
-        result[String(field.field_id)] = field.value;
-      }
-      return result;
-    }, {});
-  }
-
-  if (!values || typeof values !== 'object') {
-    return {};
-  }
-
-  return Object.entries(values).reduce<Record<string, string>>((result, [key, value]) => {
-    if (typeof value === 'string') {
-      result[String(key)] = value;
-    }
-    return result;
-  }, {});
-};
-
-const buildBaseProgramPayload = (values: any, fallbackDescription?: string) => {
-  const { custom_field_values, ...baseValues } = values;
-  if (typeof baseValues.description !== 'string') {
-    baseValues.description = fallbackDescription || '';
-  }
-  return baseValues;
-};
-
-const buildCustomFieldValuesPayload = (values: any) => {
-  const customFieldValues = values?.custom_field_values;
-
-  if (!customFieldValues || typeof customFieldValues !== 'object') {
-    return { values: [] };
-  }
-
-  return {
-    values: Object.entries(customFieldValues).reduce<Array<{ field_id: number; value: string }>>(
-      (result, [fieldId, fieldValue]) => {
-        if (typeof fieldValue !== 'string') {
-          return result;
-        }
-
-        const trimmedValue = fieldValue.trim();
-        if (!trimmedValue) {
-          return result;
-        }
-
-        result.push({
-          field_id: Number(fieldId),
-          value: trimmedValue,
-        });
-        return result;
-      },
-      [],
-    ),
-  };
-};
-
-const getProgramCustomFieldValue = (program: Program, fieldId: number) => {
-  if (Array.isArray(program.custom_field_values)) {
-    const match = program.custom_field_values.find((field) => field.field_id === fieldId);
-    return typeof match?.value === 'string' ? match.value : '';
-  }
-
-  if (!program.custom_field_values || typeof program.custom_field_values !== 'object') {
-    return '';
-  }
-
-  const value = program.custom_field_values[String(fieldId)];
-  return typeof value === 'string' ? value : '';
-};
-
-const getProgramCustomFieldSummaries = (
-  program: Program,
-): ProgramListCustomFieldValue[] => {
-  if (Array.isArray(program.custom_field_values)) {
-    return [...program.custom_field_values].sort((a, b) => a.sort_order - b.sort_order);
-  }
-
-  return [];
-};
-
-const formatFileSize = (size?: number) => {
-  if (!size) {
-    return '0 KB';
-  }
-
-  if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  return `${(size / 1024).toFixed(1)} KB`;
-};
-
-const getFileTypeLabel = (fileName: string) => {
-  const normalizedName = fileName.toLowerCase();
-
-  if (normalizedName.endsWith('.log')) {
-    return 'Log File';
-  }
-
-  if (normalizedName.endsWith('.txt')) {
-    return 'Text Document';
-  }
-
-  if (normalizedName.endsWith('.bin')) {
-    return 'Binary File';
-  }
-
-  if (normalizedName.endsWith('.nc')) {
-    return 'NC Program';
-  }
-
-  return 'Program File';
-};
-
-const parseCustomFieldOptions = (optionsJson: string) => {
-  if (!optionsJson) {
-    return [] as string[];
-  }
-
-  try {
-    const parsed = JSON.parse(optionsJson);
-    return Array.isArray(parsed)
-      ? parsed.filter((option): option is string => typeof option === 'string')
-      : [];
-  } catch {
-    return [] as string[];
-  }
-};
-
-const buildPropertyDraftSnapshot = (values: ProgramFormValues): ProgramFormValues => ({
-  name: values.name,
-  code: values.code,
-  status: values.status,
-  production_line_id: values.production_line_id,
-  vehicle_model_id: values.vehicle_model_id,
-  custom_field_values: { ...(values.custom_field_values || {}) },
-});
-
 const ProgramManagement = () => {
   const [searchParams] = useSearchParams();
-
-  const getVersionSelectionKey = (version: ProgramVersion | null | undefined) => {
-    if (!version) {
-      return null;
-    }
-    if (version.id && version.id > 0) {
-      return `id:${version.id}`;
-    }
-    return `version:${version.version}|created_at:${version.created_at}`;
-  };
   const { user } = useAuth();
   const selectedProgramId = Number(searchParams.get('id') || 0);
-  const [programs, setPrograms] = useState<Program[]>([]);
-  const [productionLines, setProductionLines] = useState<ProductionLine[]>([]);
-  const [vehicleModels, setVehicleModels] = useState<VehicleModel[]>([]);
-  const [tableLoading, setTableLoading] = useState(false);
-  const [modalLoading, setModalLoading] = useState(false);
+
   const [modalVisible, setModalVisible] = useState(false);
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [currentProgram, setCurrentProgram] = useState<Program | null>(null);
-  const [versions, setVersions] = useState<ProgramVersion[]>([]);
   const [selectedVersionKey, setSelectedVersionKey] = useState<string | null>(null);
-  const [customFields, setCustomFields] = useState<ProgramCustomFieldDefinition[]>([]);
   const [isEditingProperties, setIsEditingProperties] = useState(false);
   const [propertyDraftSnapshot, setPropertyDraftSnapshot] = useState<ProgramFormValues | null>(null);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
@@ -380,6 +104,40 @@ const ProgramManagement = () => {
   const [filterDateRange, setFilterDateRange] = useState<[string | null, string | null]>([null, null]);
   const [customFieldFilters, setCustomFieldFilters] = useState<ProgramCustomFieldDefinition[]>([]);
   const [customFieldFilterValues, setCustomFieldFilterValues] = useState<Record<string, string>>({});
+  const [programPage, setProgramPage] = useState(1);
+  const [programPageSize, setProgramPageSize] = useState(20);
+
+  const {
+    programs,
+    productionLines,
+    vehicleModels,
+    tableLoading,
+    modalLoading,
+    setModalLoading,
+    programTotal,
+    loadData,
+    filteredPrograms: sortedPrograms,
+    versions,
+    setVersions,
+    versionsPage,
+    setVersionsPage,
+    versionsPageSize,
+    versionsTotal,
+    setVersionsTotal,
+    loadVersions,
+    customFields,
+    setCustomFields,
+    loadCustomFields,
+  } = useProgramManagementData({
+    programPage,
+    programPageSize,
+    searchKeyword,
+    filterProductionLine,
+    filterVehicleModel,
+    filterStatus,
+    selectedProgramId,
+    userId: user?.id,
+  });
 
   // 关联管理相关状态
   const [relationDrawerVisible, setRelationDrawerVisible] = useState(false);
@@ -391,26 +149,7 @@ const ProgramManagement = () => {
   const [mappingFilterVehicleModel, setMappingFilterVehicleModel] = useState<number | null>(null);
   const [mappingFilterStatus, setMappingFilterStatus] = useState<string | null>(null);
 
-  // 筛选后的程序列表
-  const filteredPrograms = programs.filter((program) => {
-    // 关键词搜索（模糊匹配名称和编号）
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      const nameMatch = program.name?.toLowerCase().includes(keyword);
-      const codeMatch = program.code?.toLowerCase().includes(keyword);
-      if (!nameMatch && !codeMatch) {
-        return false;
-      }
-    }
-    if (filterProductionLine && program.production_line_id !== filterProductionLine) {
-      return false;
-    }
-    if (filterVehicleModel && program.vehicle_model_id !== filterVehicleModel) {
-      return false;
-    }
-    if (filterStatus && program.status !== filterStatus) {
-      return false;
-    }
+  const filteredPrograms = sortedPrograms.filter((program) => {
     for (const field of customFieldFilters) {
       const filterValue = customFieldFilterValues[String(field.id)]?.trim();
       if (!filterValue) {
@@ -429,7 +168,7 @@ const ProgramManagement = () => {
         return false;
       }
     }
-    // 时间筛选
+
     if (filterDateRange[0] || filterDateRange[1]) {
       const programDate = new Date(program.created_at);
       if (filterDateRange[0]) {
@@ -444,22 +183,11 @@ const ProgramManagement = () => {
       }
     }
     return true;
-  }).sort((a, b) => {
-    if (selectedProgramId) {
-      if (a.id === selectedProgramId) return -1;
-      if (b.id === selectedProgramId) return 1;
-    }
-
-    const aEditingByMe = a.status === 'in_progress' && a.editing_by === user?.id;
-    const bEditingByMe = b.status === 'in_progress' && b.editing_by === user?.id;
-    if (aEditingByMe && !bEditingByMe) return -1;
-    if (!aEditingByMe && bEditingByMe) return 1;
-
-    return 0;
   });
 
   // 重置筛选
   const handleResetFilter = () => {
+    setProgramPage(1);
     setFilterProductionLine(null);
     setFilterVehicleModel(null);
     setFilterStatus(null);
@@ -494,13 +222,9 @@ const ProgramManagement = () => {
       return true;
     });
 
-  const loadCustomFields = async (productionLineId: number) => {
-    const response = await api.get(`/production-lines/${productionLineId}/custom-fields`);
-    return buildEnabledCustomFields(response.data);
-  };
-
   const handleFilterProductionLineChange = async (value?: number) => {
     const nextValue = value ?? null;
+    setProgramPage(1);
     setFilterProductionLine(nextValue);
     setCustomFieldFilterValues({});
 
@@ -571,12 +295,10 @@ const ProgramManagement = () => {
         responseType: 'blob',
       });
 
-      // 创建下载链接
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      
-      // 从响应头获取文件名，或使用默认文件名
+
       const contentDisposition = response.headers['content-disposition'];
       let fileName = '程序列表.xlsx';
       if (contentDisposition) {
@@ -585,13 +307,13 @@ const ProgramManagement = () => {
           fileName = match[1];
         }
       }
-      
+
       link.setAttribute('download', fileName);
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      
+
       message.success('导出成功');
     } catch (error) {
       console.error('Failed to export:', error);
@@ -599,7 +321,6 @@ const ProgramManagement = () => {
     }
   };
 
-  // 关联管理函数
   const handleViewRelations = async (record: Program) => {
     setCurrentProgram(record);
     setModalLoading(true);
@@ -654,28 +375,16 @@ const ProgramManagement = () => {
     }
   };
 
-  // 版本描述编辑相关状态
   const [versionChangeLogSupported, setVersionChangeLogSupported] = useState(true);
   const [batchImportSupported, setBatchImportSupported] = useState(true);
 
-  // 批量导入相关状态
   const [batchImportVisible, setBatchImportVisible] = useState(false);
   const [batchImportStep, setBatchImportStep] = useState(0);
-  const [batchImportPreview, setBatchImportPreview] =
-    useState<BatchImportPreview | null>(null);
-  const [workstationMappings, setWorkstationMappings] = useState<
-    WorkstationMapping[]
-  >([]);
-  const [batchImportStatus, setBatchImportStatus] =
-    useState<BatchImportStatus | null>(null);
-  const [batchImportPolling, setBatchImportPolling] = useState<ReturnType<
-    typeof setInterval
-  > | null>(null);
+  const [batchImportPreview, setBatchImportPreview] = useState<BatchImportPreview | null>(null);
+  const [workstationMappings, setWorkstationMappings] = useState<WorkstationMapping[]>([]);
+  const [batchImportStatus, setBatchImportStatus] = useState<BatchImportStatus | null>(null);
+  const [batchImportPolling, setBatchImportPolling] = useState<ReturnType<typeof setInterval> | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   useEffect(() => {
     if (!fileModalVisible && !modalVisible) {
@@ -707,30 +416,8 @@ const ProgramManagement = () => {
       return;
     }
 
-    form.setFieldValue(
-      'custom_field_values',
-      normalizeCustomFieldValues(currentProgram.custom_field_values),
-    );
+    form.setFieldValue('custom_field_values', normalizeCustomFieldValues(currentProgram.custom_field_values));
   }, [currentProgram, form, modalVisible, customFields]);
-
-  const loadData = async () => {
-    setTableLoading(true);
-    try {
-      const [programsRes, linesRes, modelsRes] = await Promise.all([
-        api.get('/programs'),
-        api.get('/production-lines'),
-        api.get('/vehicle-models'),
-      ]);
-      setPrograms(programsRes.data);
-      setProductionLines(linesRes.data);
-      setVehicleModels(modelsRes.data);
-    } catch (error) {
-      console.error('Failed to load data:', error);
-      message.error('加载数据失败，请刷新重试');
-    } finally {
-      setTableLoading(false);
-    }
-  };
 
   const handleAdd = () => {
     setCurrentProgram(null);
@@ -749,6 +436,8 @@ const ProgramManagement = () => {
     setCurrentProgram(record);
     setCustomFields([]);
     setVersions([]);
+    setVersionsPage(1);
+    setVersionsTotal(0);
     setSelectedVersionKey(null);
     setIsEditingProperties(false);
     setPropertyDraftSnapshot(null);
@@ -761,14 +450,11 @@ const ProgramManagement = () => {
     setModalVisible(true);
 
     try {
-      const versionsResponse = await api.get(`/files/program/${record.id}`);
-      const nextVersions = versionsResponse.data.versions || [];
-      setVersions(nextVersions);
-      const preferredVersion = nextVersions.find((version: ProgramVersion) => version.is_current) ?? nextVersions[0] ?? null;
-      setSelectedVersionKey(getVersionSelectionKey(preferredVersion));
+      await loadVersions(record.id, 1);
     } catch (error) {
       console.error('Failed to load editor versions:', error);
       setVersions([]);
+      setVersionsTotal(0);
       setSelectedVersionKey(null);
     }
 
@@ -1009,11 +695,9 @@ const ProgramManagement = () => {
       setUploadModalVisible(false);
       loadData();
       
-      // 如果当前正在查看程序版本详情，则刷新版本列表
-      if (currentProgram && fileModalVisible) {
+      if (currentProgram && (fileModalVisible || modalVisible)) {
         try {
-          const res = await api.get(`/files/program/${currentProgram.id}`);
-          setVersions(res.data.versions || []);
+          await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
         } catch (e) {
           console.error('Failed to reload versions:', e);
         }
@@ -1031,10 +715,12 @@ const ProgramManagement = () => {
   // 小眼睛入口: 版本文件查看弹窗，控制 `fileModalVisible`
   const handleViewFiles = async (record: Program) => {
     setCurrentProgram(record);
+    setVersions([]);
+    setVersionsPage(1);
+    setVersionsTotal(0);
     setModalLoading(true);
     try {
-      const response = await api.get(`/files/program/${record.id}`);
-      setVersions(response.data.versions || []);
+      await loadVersions(record.id, 1);
       setFileModalVisible(true);
     } catch (error) {
       console.error('Failed to load files:', error);
@@ -1109,8 +795,7 @@ const ProgramManagement = () => {
       await api.delete(`/files/${fileId}`);
       message.success('文件删除成功');
       if (currentProgram) {
-        const response = await api.get(`/files/program/${currentProgram.id}`);
-        setVersions(response.data.versions || []);
+        await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
       }
     } catch (error: any) {
       console.error('Failed to delete file:', error);
@@ -1350,7 +1035,7 @@ const ProgramManagement = () => {
 
     try {
       await downloadWithAuth(
-        `/files/download/version/${editorSelectedVersion.version}`,
+        `/files/download/version/${editorSelectedVersion.version}?program_id=${currentProgram.id}`,
         `${currentProgram.code || currentProgram.id}_${editorSelectedVersion.version}.zip`,
       );
     } catch (error) {
@@ -1434,8 +1119,7 @@ const ProgramManagement = () => {
       });
 
       if (currentProgram) {
-        const response = await api.get(`/files/program/${currentProgram.id}`);
-        setVersions(response.data.versions || []);
+        await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
       }
 
       setIsEditingDescription(false);
@@ -1454,243 +1138,40 @@ const ProgramManagement = () => {
   return (
     <div className="management-page">
       {/* 顶部标题区 */}
-      <div className="management-page-header">
-        <div>
-          <div className="management-page-breadcrumb">
-            <span>制造</span>
-            <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>/</span>
-            <span className="active">程序管理</span>
-          </div>
-          <Title level={2} className="management-page-title">
-            程序管理
-          </Title>
-        </div>
-        <Space>
-          <Button 
-            icon={<FileExcelOutlined />} 
-            onClick={handleExportExcel}
-            style={{ height: '44px', borderRadius: '8px', fontWeight: 600, padding: '0 16px' }}
-          >
-            导出Excel
-          </Button>
-          <Button
-            icon={<FolderAddOutlined />}
-            onClick={handleBatchImport}
-            disabled={!batchImportSupported}
-            style={{ height: '44px', borderRadius: '8px', fontWeight: 600, padding: '0 16px' }}
-          >
-            批量导入
-          </Button>
-          <Button 
-            type="primary" 
-            icon={<PlusOutlined />} 
-            onClick={handleAdd}
-            style={{
-              background: 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)',
-              border: 'none',
-              boxShadow: '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)',
-              borderRadius: '8px',
-              height: '44px',
-              padding: '0 24px',
-              fontWeight: 600,
-              fontSize: '16px'
-            }}
-          >
-            新建程序
-          </Button>
-        </Space>
-      </div>
+      <ProgramHeader
+        batchImportSupported={batchImportSupported}
+        onExportExcel={handleExportExcel}
+        onBatchImport={handleBatchImport}
+        onAddProgram={handleAdd}
+      />
 
       {/* 筛选区域 */}
-      <ConfigProvider
-        theme={{
-          components: {
-            Input: {
-              controlHeight: 36,
-              borderRadius: 8,
-              colorBorder: 'transparent',
-              colorPrimaryHover: 'transparent',
-              controlOutline: 'none',
-            },
-            Select: {
-              controlHeight: 36,
-              borderRadius: 8,
-              colorBorder: 'transparent',
-              colorPrimaryHover: 'transparent',
-              controlOutline: 'none',
-            },
-            DatePicker: {
-              controlHeight: 36,
-              borderRadius: 8,
-              colorBorder: 'transparent',
-              colorPrimaryHover: 'transparent',
-              controlOutline: 'none',
-            }
-          }
+      <ProgramFilterPanel
+        searchKeyword={searchKeyword}
+        filterProductionLine={filterProductionLine}
+        filterVehicleModel={filterVehicleModel}
+        filterStatus={filterStatus}
+        productionLines={productionLines}
+        vehicleModels={vehicleModels}
+        customFieldFilters={customFieldFilters}
+        customFieldFilterValues={customFieldFilterValues}
+        onSearchKeywordChange={(value) => {
+          setProgramPage(1);
+          setSearchKeyword(value);
         }}
-      >
-      <div className="management-filter-panel">
-        <div className="management-filter-field flex">
-          <div className="management-filter-label">程序名称/编号</div>
-            <Input 
-              style={{ width: '192px', maxWidth: '100%' }}
-              placeholder="搜索参数..." 
-              value={searchKeyword} 
-              onChange={(e) => setSearchKeyword(e.target.value)}
-            />
-          </div>
-        <div className="management-filter-field">
-          <div className="management-filter-label">生产线</div>
-            <Select 
-              placeholder="所有生产线" 
-              value={filterProductionLine} 
-              onChange={handleFilterProductionLineChange}
-              allowClear
-              style={{ width: '168px', maxWidth: '100%' }}
-            >
-              {productionLines.map((line: any) => (
-                <Select.Option key={line.id} value={line.id}>
-                  {line.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </div>
-        <div className="management-filter-field">
-          <div className="management-filter-label">车型</div>
-            <Select 
-              placeholder="所有车型" 
-              value={filterVehicleModel} 
-              onChange={setFilterVehicleModel}
-              allowClear
-              style={{ width: '168px', maxWidth: '100%' }}
-            >
-              {vehicleModels.map((model: any) => (
-                <Select.Option key={model.id} value={model.id}>
-                  {model.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </div>
-        <div className="management-filter-field">
-          <div className="management-filter-label">状态</div>
-            <Select 
-              placeholder="所有状态" 
-              value={filterStatus} 
-              onChange={setFilterStatus}
-              allowClear
-              style={{ width: '148px', maxWidth: '100%' }}
-            >
-              <Select.Option value="completed">已完成</Select.Option>
-              <Select.Option value="in_progress">进行中</Select.Option>
-            </Select>
-          </div>
-          <div className="management-filter-field">
-            <div className="management-filter-label">创建日期</div>
-            <DatePicker.RangePicker 
-              style={{ width: '176px', maxWidth: '100%' }}
-              onChange={(_, dateStrings) => {
-                setFilterDateRange([dateStrings[0] || null, dateStrings[1] || null]);
-              }}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Button 
-              onClick={() => {}}
-              icon={<SearchOutlined />}
-              style={{ height: '40px', width: '104px', borderRadius: '8px', background: '#DEE3E6', color: '#2D3335', fontWeight: 700, border: 'none' }}
-            >
-              查询
-            </Button>
-            <Button 
-              type="text"
-              onClick={handleResetFilter} 
-              style={{ height: '40px', color: '#005BC1', fontWeight: 700, letterSpacing: '1.2px', border: 'none', background: 'transparent' }}
-            >
-              重置
-            </Button>
-          </div>
-
-          {filterProductionLine && customFieldFilters.length > 0 && (
-            <div
-              style={{
-                gridColumn: '1 / -1',
-                marginTop: '4px',
-                paddingTop: '20px',
-                borderTop: '1px solid rgba(173, 179, 181, 0.18)',
-              }}
-            >
-              <div
-                style={{
-                  padding: '0',
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '14px',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      minWidth: '84px',
-                      minHeight: '36px',
-                      alignSelf: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <SlidersOutlined style={{ color: '#94A3B8', fontSize: '21px' }} />
-                    <span
-                      style={{
-                        color: '#64748B',
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        letterSpacing: '0.14em',
-                        textTransform: 'uppercase',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      自定义筛选
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      width: '1px',
-                      alignSelf: 'stretch',
-                      margin: '4px 0',
-                      background: 'rgba(173, 179, 181, 0.18)',
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: '260px' }}>
-                    <div
-                      style={{
-                        color: '#5A6062',
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        letterSpacing: '0.12em',
-                        textTransform: 'uppercase',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      当前产线字段
-                    </div>
-                    <ProgramCustomFieldFilter
-                      fields={customFieldFilters}
-                      values={customFieldFilterValues}
-                      onChange={handleCustomFieldFilterChange}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </ConfigProvider>
+        onFilterProductionLineChange={handleFilterProductionLineChange}
+        onFilterVehicleModelChange={(value) => {
+          setProgramPage(1);
+          setFilterVehicleModel(value ?? null);
+        }}
+        onFilterStatusChange={(value) => {
+          setProgramPage(1);
+          setFilterStatus(value ?? null);
+        }}
+        onDateRangeChange={setFilterDateRange}
+        onReset={handleResetFilter}
+        onCustomFieldFilterChange={handleCustomFieldFilterChange}
+      />
 
       {/* 数据表格 */}
       <div className="management-table-card">
@@ -1700,7 +1181,23 @@ const ProgramManagement = () => {
           dataSource={filteredPrograms}
           rowKey="id"
           loading={tableLoading}
+          onChange={(pagination: TablePaginationConfig) => {
+            const nextPage = pagination.current || 1;
+            const nextPageSize = pagination.pageSize || 20;
+            if (nextPage !== programPage) {
+              setProgramPage(nextPage);
+            }
+            if (nextPageSize !== programPageSize) {
+              setProgramPageSize(nextPageSize);
+              setProgramPage(1);
+            }
+          }}
           pagination={{
+            current: programPage,
+            pageSize: programPageSize,
+            total: programTotal,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
             showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
             style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
           }}
@@ -1916,6 +1413,24 @@ const ProgramManagement = () => {
                     );
                   })}
                 </div>
+                {currentProgram && versionsTotal > versionsPageSize && (
+                  <div style={{ marginTop: '8px' }}>
+                    <Pagination
+                      size="small"
+                      current={versionsPage}
+                      pageSize={versionsPageSize}
+                      total={versionsTotal}
+                      showSizeChanger
+                      pageSizeOptions={[10, 20, 50]}
+                      onChange={(page, pageSize) => {
+                        if (!currentProgram) {
+                          return;
+                        }
+                        void loadVersions(currentProgram.id, page, pageSize);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="program-editor-main">
@@ -2194,34 +1709,54 @@ const ProgramManagement = () => {
               ) : fileModalVersions.length === 0 ? (
                 <div className="program-view-sidebar-empty">暂无版本信息</div>
               ) : (
-                <div className="program-view-version-list">
-                  {fileModalVersions.map((version) => {
-                    const versionKey = getVersionSelectionKey(version);
-                    const selectedKey = getVersionSelectionKey(fileModalSelectedVersion);
-                    const isActive = versionKey !== null && versionKey === selectedKey;
-                    return (
-                      <button
-                        key={version.id}
-                        type="button"
-                        onClick={() => setSelectedVersionKey(getVersionSelectionKey(version))}
-                        className={`program-view-version-item${isActive ? ' active' : ''}`}
-                      >
-                        <div className="program-view-version-dot">
-                          <ClockCircleFilled />
-                        </div>
-                        <div className="program-view-version-content">
-                          <div className="program-view-version-row">
-                            <span className="program-view-version-name">{version.version}</span>
-                            {isActive && <span className="program-view-version-current">当前</span>}
+                <>
+                  <div className="program-view-version-list">
+                    {fileModalVersions.map((version) => {
+                      const versionKey = getVersionSelectionKey(version);
+                      const selectedKey = getVersionSelectionKey(fileModalSelectedVersion);
+                      const isActive = versionKey !== null && versionKey === selectedKey;
+                      return (
+                        <button
+                          key={version.id}
+                          type="button"
+                          onClick={() => setSelectedVersionKey(getVersionSelectionKey(version))}
+                          className={`program-view-version-item${isActive ? ' active' : ''}`}
+                        >
+                          <div className="program-view-version-dot">
+                            <ClockCircleFilled />
                           </div>
-                          <div className="program-view-version-date">
-                            {new Date(version.created_at).toLocaleString('zh-CN', { hour12: false })}
+                          <div className="program-view-version-content">
+                            <div className="program-view-version-row">
+                              <span className="program-view-version-name">{version.version}</span>
+                              {isActive && <span className="program-view-version-current">当前</span>}
+                            </div>
+                            <div className="program-view-version-date">
+                              {new Date(version.created_at).toLocaleString('zh-CN', { hour12: false })}
+                            </div>
                           </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {currentProgram && versionsTotal > versionsPageSize && (
+                    <div style={{ marginTop: '8px' }}>
+                      <Pagination
+                        size="small"
+                        current={versionsPage}
+                        pageSize={versionsPageSize}
+                        total={versionsTotal}
+                        showSizeChanger
+                        pageSizeOptions={[10, 20, 50]}
+                        onChange={(page, pageSize) => {
+                          if (!currentProgram) {
+                            return;
+                          }
+                          void loadVersions(currentProgram.id, page, pageSize);
+                        }}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </aside>
 

@@ -23,6 +23,20 @@ func backupDir() string {
 	return utils.BackupDir()
 }
 
+func isPathWithinBackupDir(targetPath string) bool {
+	rel, err := filepath.Rel(filepath.Clean(backupDir()), filepath.Clean(targetPath))
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
+}
+
 // CreateDatabaseBackup 创建数据库备份
 func CreateDatabaseBackup(c *gin.Context) {
 	// 生成备份文件名
@@ -224,7 +238,7 @@ func DeleteBackup(c *gin.Context) {
 	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
+	if !isPathWithinBackupDir(backupPath) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -250,7 +264,7 @@ func RestoreDatabase(c *gin.Context) {
 	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
+	if !isPathWithinBackupDir(backupPath) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
@@ -322,55 +336,52 @@ func RestoreFiles(c *gin.Context) {
 	backupName := c.Param("name")
 	backupPath := filepath.Join(backupDir(), backupName)
 
-	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
+	if !isPathWithinBackupDir(backupPath) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}
-
-	// 检查备份文件是否存在
 	if !utils.FileExists(backupPath) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "备份文件不存在"})
 		return
 	}
-
-	// 验证这是一个有效的文件备份
 	if !strings.HasPrefix(backupName, "files_backup_") && !strings.HasPrefix(backupName, "full_backup_") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的文件备份文件"})
 		return
 	}
 
-	// 创建当前文件的备份作为回滚点
-	currentBackupName := fmt.Sprintf("rollback_files_before_restore_%s.zip", time.Now().Format("20060102_150405"))
+	timestamp := time.Now().Format("20060102_150405")
+	currentBackupName := fmt.Sprintf("rollback_files_before_restore_%s.zip", timestamp)
 	currentBackupPath := filepath.Join(backupDir(), currentBackupName)
 
-	if utils.FileExists(utils.UploadDir()) {
-		if err := createZipBackup(utils.UploadDir(), currentBackupPath); err != nil {
+	uploadDir := utils.UploadDir()
+	uploadParent := filepath.Dir(uploadDir)
+	uploadBase := filepath.Base(uploadDir)
+	rollbackDir := filepath.Join(uploadParent, uploadBase+"_rollback_"+timestamp)
+	tempRestoreDir := filepath.Join(uploadParent, uploadBase+"_restore_tmp_"+timestamp)
+	fullTempDir := filepath.Join(backupDir(), "temp_restore", timestamp)
+	defer os.RemoveAll(tempRestoreDir)
+	defer os.RemoveAll(fullTempDir)
+
+	if utils.FileExists(uploadDir) {
+		if err := createZipBackup(uploadDir, currentBackupPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建回滚点失败"})
 			return
 		}
 	}
 
-	// 如果是完整备份，需要先解压
 	if strings.HasPrefix(backupName, "full_backup_") {
-		tempDir := filepath.Join(backupDir(), "temp_restore", time.Now().Format("20060102_150405"))
-		if err := utils.EnsureDirectoryExists(tempDir); err != nil {
+		if err := utils.EnsureDirectoryExists(fullTempDir); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时目录失败"})
 			return
 		}
-		defer os.RemoveAll(tempDir)
-
-		// 解压完整备份
-		if err := extractZipBackup(backupPath, tempDir); err != nil {
+		if err := extractZipBackup(backupPath, fullTempDir); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "解压备份失败: " + err.Error()})
 			return
 		}
 
-		// 查找文件备份
-		filesBackups, err := filepath.Glob(filepath.Join(tempDir, "files_*.zip"))
+		filesBackups, err := filepath.Glob(filepath.Join(fullTempDir, "files_*.zip"))
 		if err != nil || len(filesBackups) == 0 {
-			// 如果没找到files_*.zip，尝试查找files.zip
-			filesBackup := filepath.Join(tempDir, "files.zip")
+			filesBackup := filepath.Join(fullTempDir, "files.zip")
 			if _, err := os.Stat(filesBackup); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "备份中未找到文件备份"})
 				return
@@ -380,18 +391,37 @@ func RestoreFiles(c *gin.Context) {
 		backupPath = filesBackups[0]
 	}
 
-	// 删除现有文件目录
-	if utils.FileExists(utils.UploadDir()) {
-		if err := utils.DeleteDirectory(utils.UploadDir()); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "删除现有文件失败"})
+	if err := utils.EnsureDirectoryExists(tempRestoreDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建恢复目录失败"})
+		return
+	}
+	if err := extractZipBackup(backupPath, tempRestoreDir); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件恢复失败: " + err.Error()})
+		return
+	}
+	if !utils.FileExists(filepath.Join(tempRestoreDir, uploadBase)) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "恢复包缺少uploads目录"})
+		return
+	}
+
+	if utils.FileExists(uploadDir) {
+		if err := os.Rename(uploadDir, rollbackDir); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建回滚快照失败"})
 			return
 		}
 	}
 
-	// 解压文件备份
-	if err := extractZipBackup(backupPath, filepath.Dir(utils.UploadDir())); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件恢复失败: " + err.Error()})
+	restoredUploadDir := filepath.Join(tempRestoreDir, uploadBase)
+	if err := os.Rename(restoredUploadDir, uploadDir); err != nil {
+		if utils.FileExists(rollbackDir) {
+			_ = os.Rename(rollbackDir, uploadDir)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "原子替换失败"})
 		return
+	}
+
+	if utils.FileExists(rollbackDir) {
+		_ = os.RemoveAll(rollbackDir)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -406,7 +436,7 @@ func DownloadBackup(c *gin.Context) {
 	backupPath := filepath.Join(backupDir(), backupName)
 
 	// 检查路径安全性
-	if !strings.HasPrefix(filepath.Clean(backupPath), filepath.Clean(backupDir())) {
+	if !isPathWithinBackupDir(backupPath) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不安全的备份路径"})
 		return
 	}

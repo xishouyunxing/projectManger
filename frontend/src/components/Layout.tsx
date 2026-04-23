@@ -183,7 +183,7 @@ const Layout = () => {
       setProfileModalVisible(false);
       passwordForm.resetFields();
     } catch (error: any) {
-      message.error(error.response?.data?.message || '密码修改失败');
+      message.error(error.response?.data?.error || error.response?.data?.message || '密码修改失败');
     } finally {
       setPasswordLoading(false);
     }

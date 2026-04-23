@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Modal, Input, List, Typography, Tag, Empty, Spin, Tabs } from 'antd';
+import { Modal, Input, List, Typography, Tag, Empty, Spin, Tabs, Alert } from 'antd';
 import {
   SearchOutlined,
   FileTextOutlined,
@@ -41,10 +41,11 @@ const GlobalSearch = ({ open, onClose }: GlobalSearchProps) => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SearchResult | null>(null);
   const [activeTab, setActiveTab] = useState('programs');
+  const [searchSupported, setSearchSupported] = useState(true);
   const navigate = useNavigate();
 
   const handleSearch = useCallback(async (value: string) => {
-    if (!value.trim()) {
+    if (!searchSupported || !value.trim()) {
       setResult(null);
       return;
     }
@@ -62,7 +63,12 @@ const GlobalSearch = ({ open, onClose }: GlobalSearchProps) => {
       } else if (response.data.lines.length > 0) {
         setActiveTab('lines');
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.response?.status === 404 || error?.response?.status === 405) {
+        setSearchSupported(false);
+        setResult(null);
+        return;
+      }
       console.error('Search failed:', error);
     } finally {
       setLoading(false);
@@ -123,7 +129,9 @@ const GlobalSearch = ({ open, onClose }: GlobalSearchProps) => {
       }
       closable={false}
     >
-      {loading ? (
+      {!searchSupported ? (
+        <Alert type="info" showIcon message="当前环境未启用全局搜索" />
+      ) : loading ? (
         <div style={{ textAlign: 'center', padding: '40px' }}>
           <Spin />
         </div>

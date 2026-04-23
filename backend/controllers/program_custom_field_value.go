@@ -20,6 +20,12 @@ type programCustomFieldValueInput struct {
 }
 
 func SaveProgramCustomFieldValues(c *gin.Context) {
+	programID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		return
+	}
+
 	var req saveProgramCustomFieldValuesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -31,8 +37,8 @@ func SaveProgramCustomFieldValues(c *gin.Context) {
 	}
 
 	var savedValues []models.ProgramCustomFieldValue
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		_, targetProgramID, _, err := resolveProgramTarget(tx, parseUintParam(c.Param("id")))
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		_, targetProgramID, _, err := resolveProgramTarget(tx, programID)
 		if err != nil {
 			return err
 		}
@@ -40,6 +46,9 @@ func SaveProgramCustomFieldValues(c *gin.Context) {
 		var program models.Program
 		if err := tx.First(&program, targetProgramID).Error; err != nil {
 			return err
+		}
+		if !authorizeLineAction(c, program.ProductionLineID, lineActionManage) {
+			return errors.New("forbidden")
 		}
 
 		newValues := make([]models.ProgramCustomFieldValue, 0, len(req.Values))
@@ -101,16 +110,18 @@ func SaveProgramCustomFieldValues(c *gin.Context) {
 		savedValues = newValues
 		return nil
 	})
-	if err != nil {
+	if txErr != nil {
 		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
+		case errors.Is(txErr, gorm.ErrRecordNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
-		case errors.Is(err, errProgramCustomFieldFieldIDRequired),
-			errors.Is(err, errProgramCustomFieldDuplicateFieldID),
-			errors.Is(err, errProgramCustomFieldNotBelongToProductionLine),
-			errors.Is(err, errProgramCustomFieldInvalidSelectValue),
-			errors.Is(err, errProgramCustomFieldDisabled):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(txErr, errProgramCustomFieldFieldIDRequired),
+			errors.Is(txErr, errProgramCustomFieldDuplicateFieldID),
+			errors.Is(txErr, errProgramCustomFieldNotBelongToProductionLine),
+			errors.Is(txErr, errProgramCustomFieldInvalidSelectValue),
+			errors.Is(txErr, errProgramCustomFieldDisabled):
+			c.JSON(http.StatusBadRequest, gin.H{"error": txErr.Error()})
+		case txErr.Error() == "forbidden":
+			return
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		}

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -26,37 +27,79 @@ type FileMigrationStatus struct {
 	ErrorMsg      string  `json:"error_msg,omitempty"`
 }
 
-var migrationStatus *FileMigrationStatus
+var (
+	migrationMu     sync.RWMutex
+	migrationStatus *FileMigrationStatus
+)
+
+func ensureMigrationStatusLocked() {
+	if migrationStatus != nil {
+		return
+	}
+	migrationStatus = &FileMigrationStatus{Status: "not_started"}
+}
+
+func cloneMigrationStatus(status *FileMigrationStatus) FileMigrationStatus {
+	if status == nil {
+		return FileMigrationStatus{Status: "not_started"}
+	}
+	return *status
+}
 
 // GetMigrationStatus 获取迁移状态
-func GetMigrationStatus() *FileMigrationStatus {
-	if migrationStatus == nil {
-		migrationStatus = &FileMigrationStatus{
-			Status: "not_started",
-		}
+func GetMigrationStatus() FileMigrationStatus {
+	migrationMu.RLock()
+	if migrationStatus != nil {
+		snapshot := cloneMigrationStatus(migrationStatus)
+		migrationMu.RUnlock()
+		return snapshot
 	}
-	return migrationStatus
+	migrationMu.RUnlock()
+
+	migrationMu.Lock()
+	ensureMigrationStatusLocked()
+	snapshot := cloneMigrationStatus(migrationStatus)
+	migrationMu.Unlock()
+	return snapshot
+}
+
+func startMigration(now time.Time) bool {
+	migrationMu.Lock()
+	defer migrationMu.Unlock()
+
+	ensureMigrationStatusLocked()
+	if migrationStatus.Status == "running" {
+		return false
+	}
+
+	migrationStatus = &FileMigrationStatus{
+		Status:    "running",
+		StartTime: now.Format(time.RFC3339),
+	}
+	return true
+}
+
+func updateMigrationStatus(mutator func(status *FileMigrationStatus)) {
+	migrationMu.Lock()
+	defer migrationMu.Unlock()
+	ensureMigrationStatusLocked()
+	mutator(migrationStatus)
 }
 
 // MigrateFilesToNewStructure 迁移文件到新的目录结构
 func MigrateFilesToNewStructure() error {
-	// 检查是否已经在运行
-	status := GetMigrationStatus()
-	if status.Status == "running" {
+	if !startMigration(time.Now()) {
 		return fmt.Errorf("文件迁移正在进行中")
-	}
-
-	// 重置状态
-	migrationStatus = &FileMigrationStatus{
-		Status:    "running",
-		StartTime: time.Now().Format(time.RFC3339),
 	}
 
 	// 确保备份目录存在
 	backupDir := filepath.Join(utils.BackupDir(), "file_migration", time.Now().Format("20060102_150405"))
 	if err := utils.EnsureDirectoryExists(backupDir); err != nil {
-		status.Status = "failed"
-		status.ErrorMsg = fmt.Sprintf("创建备份目录失败: %v", err)
+		updateMigrationStatus(func(status *FileMigrationStatus) {
+			status.Status = "failed"
+			status.ErrorMsg = fmt.Sprintf("创建备份目录失败: %v", err)
+			status.EndTime = time.Now().Format(time.RFC3339)
+		})
 		return err
 	}
 
@@ -67,8 +110,11 @@ func MigrateFilesToNewStructure() error {
 
 	if utils.FileExists(utils.UploadDir()) {
 		if err := createZipBackup(utils.UploadDir(), backupPath); err != nil {
-			status.Status = "failed"
-			status.ErrorMsg = fmt.Sprintf("创建备份失败: %v", err)
+			updateMigrationStatus(func(status *FileMigrationStatus) {
+				status.Status = "failed"
+				status.ErrorMsg = fmt.Sprintf("创建备份失败: %v", err)
+				status.EndTime = time.Now().Format(time.RFC3339)
+			})
 			return err
 		}
 		log.Printf("备份已创建: %s", backupPath)
@@ -77,52 +123,70 @@ func MigrateFilesToNewStructure() error {
 	// 查询所有需要迁移的文件
 	var files []models.ProgramFile
 	if err := database.DB.Find(&files).Error; err != nil {
-		status.Status = "failed"
-		status.ErrorMsg = fmt.Sprintf("查询文件记录失败: %v", err)
+		updateMigrationStatus(func(status *FileMigrationStatus) {
+			status.Status = "failed"
+			status.ErrorMsg = fmt.Sprintf("查询文件记录失败: %v", err)
+			status.EndTime = time.Now().Format(time.RFC3339)
+		})
 		return err
 	}
 
-	status.TotalFiles = len(files)
-	if status.TotalFiles == 0 {
-		status.Status = "completed"
-		status.EndTime = time.Now().Format(time.RFC3339)
+	totalFiles := len(files)
+	updateMigrationStatus(func(status *FileMigrationStatus) {
+		status.TotalFiles = totalFiles
+	})
+	if totalFiles == 0 {
+		updateMigrationStatus(func(status *FileMigrationStatus) {
+			status.Status = "completed"
+			status.EndTime = time.Now().Format(time.RFC3339)
+			status.Progress = 100
+		})
 		log.Println("没有需要迁移的文件")
 		return nil
 	}
 
-	log.Printf("开始迁移 %d 个文件...", status.TotalFiles)
+	log.Printf("开始迁移 %d 个文件...", totalFiles)
 
 	// 逐个迁移文件
 	for i, file := range files {
-		status.CurrentFile = file.FileName
-		status.Progress = float64(i) / float64(status.TotalFiles) * 100
+		updateMigrationStatus(func(status *FileMigrationStatus) {
+			status.CurrentFile = file.FileName
+			status.Progress = float64(i) / float64(totalFiles) * 100
+		})
 
-		// 检查文件是否已经是新路径格式（以车型/生产线开头的）
 		if isAlreadyMigrated(file.FilePath) {
 			log.Printf("文件 %s 已经是新格式，跳过", file.FileName)
-			status.MigratedFiles++
+			updateMigrationStatus(func(status *FileMigrationStatus) {
+				status.MigratedFiles++
+				status.Progress = float64(i+1) / float64(totalFiles) * 100
+			})
 			continue
 		}
 
-		// 迁移文件
 		if err := migrateSingleFile(&file, backupDir); err != nil {
 			log.Printf("迁移文件 %s 失败: %v", file.FileName, err)
-			status.FailedFiles++
-			status.ErrorMsg = fmt.Sprintf("迁移文件 %s 失败: %v", file.FileName, err)
+			updateMigrationStatus(func(status *FileMigrationStatus) {
+				status.FailedFiles++
+				status.ErrorMsg = fmt.Sprintf("迁移文件 %s 失败: %v", file.FileName, err)
+				status.Progress = float64(i+1) / float64(totalFiles) * 100
+			})
 		} else {
-			status.MigratedFiles++
 			log.Printf("文件 %s 迁移成功", file.FileName)
+			updateMigrationStatus(func(status *FileMigrationStatus) {
+				status.MigratedFiles++
+				status.Progress = float64(i+1) / float64(totalFiles) * 100
+			})
 		}
-
-		// 更新进度
-		status.Progress = float64(i+1) / float64(status.TotalFiles) * 100
 	}
 
-	// 完成迁移
-	status.Status = "completed"
-	status.EndTime = time.Now().Format(time.RFC3339)
+	finalStatus := GetMigrationStatus()
+	updateMigrationStatus(func(status *FileMigrationStatus) {
+		status.Status = "completed"
+		status.EndTime = time.Now().Format(time.RFC3339)
+		status.Progress = 100
+	})
 
-	log.Printf("文件迁移完成: 成功 %d, 失败 %d", status.MigratedFiles, status.FailedFiles)
+	log.Printf("文件迁移完成: 成功 %d, 失败 %d", finalStatus.MigratedFiles, finalStatus.FailedFiles)
 	return nil
 }
 

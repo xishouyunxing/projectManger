@@ -79,3 +79,13 @@ Thumbs.db
 # Deployment artifacts
 deploy/
 deploy.zip
+
+# Local task tracking and temporary analysis artifacts
+task.md
+*.diff
+current.diff
+out.diff
+out2.diff
+.codebuddy/
+assets/figma/
+assets/CodeBuddyAssets/

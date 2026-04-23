@@ -5,16 +5,43 @@ import (
 	"crane-system/database"
 	"crane-system/models"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func GetUsers(c *gin.Context) {
+	pageQuery := c.Query("page")
+	pageSizeQuery := c.Query("page_size")
+	paged := pageQuery != "" || pageSizeQuery != ""
+
+	page := 1
+	if pageQuery != "" {
+		parsedPage, err := strconv.Atoi(pageQuery)
+		if err != nil || parsedPage < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page参数格式错误"})
+			return
+		}
+		page = parsedPage
+	}
+
+	pageSize := 20
+	if pageSizeQuery != "" {
+		parsedPageSize, err := strconv.Atoi(pageSizeQuery)
+		if err != nil || parsedPageSize < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page_size参数格式错误"})
+			return
+		}
+		if parsedPageSize > 200 {
+			parsedPageSize = 200
+		}
+		pageSize = parsedPageSize
+	}
+
 	var users []models.User
 	query := database.DB.Preload("Department")
 
-	// 筛选
 	if deptID := c.Query("department_id"); deptID != "" {
 		query = query.Where("department_id = ?", deptID)
 	}
@@ -22,17 +49,45 @@ func GetUsers(c *gin.Context) {
 		query = query.Where("role = ?", role)
 	}
 
+	var total int64
+	if paged {
+		if err := query.Model(&models.User{}).Count(&total).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			return
+		}
+		query = query.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+
 	if err := query.Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
 
-	c.JSON(http.StatusOK, users)
+	if !paged {
+		c.JSON(http.StatusOK, users)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items":     users,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 func GetUser(c *gin.Context) {
+	targetID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+	if !authorizeOwnerOrAdmin(c, targetID) {
+		return
+	}
+
 	var user models.User
-	if err := database.DB.Preload("Department").First(&user, c.Param("id")).Error; err != nil {
+	if err := database.DB.Preload("Department").First(&user, targetID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
@@ -64,8 +119,14 @@ func CreateUser(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	targetID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
 	var user models.User
-	if err := database.DB.First(&user, c.Param("id")).Error; err != nil {
+	if err := database.DB.First(&user, targetID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
@@ -100,8 +161,19 @@ func UpdateUser(c *gin.Context) {
 }
 
 func DeleteUser(c *gin.Context) {
-	if err := database.DB.Delete(&models.User{}, c.Param("id")).Error; err != nil {
+	targetID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
+	result := database.DB.Delete(&models.User{}, targetID)
+	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
 
@@ -109,30 +181,56 @@ func DeleteUser(c *gin.Context) {
 }
 
 type ChangePasswordRequest struct {
-	OldPassword string `json:"old_password" binding:"required"`
+	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password" binding:"required"`
 }
 
 func ChangePassword(c *gin.Context) {
+	targetID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
+	if !authorizeOwnerOrAdmin(c, targetID) {
+		return
+	}
+
 	var req ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	currentUserIDValue, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证用户"})
+		return
+	}
+	currentUserID, ok := currentUserIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户身份无效"})
+		return
+	}
+	isSelfService := currentUserID == targetID
+
 	var user models.User
-	if err := database.DB.First(&user, c.Param("id")).Error; err != nil {
+	if err := database.DB.First(&user, targetID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
 
-	// 验证旧密码
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "旧密码错误"})
-		return
+	if isSelfService {
+		if req.OldPassword == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "旧密码不能为空"})
+			return
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "旧密码错误"})
+			return
+		}
 	}
 
-	// 加密新密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
@@ -149,8 +247,14 @@ func ChangePassword(c *gin.Context) {
 }
 
 func ResetPassword(c *gin.Context) {
+	targetID, err := parseUintParam(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
 	var user models.User
-	if err := database.DB.First(&user, c.Param("id")).Error; err != nil {
+	if err := database.DB.First(&user, targetID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}

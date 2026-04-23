@@ -115,6 +115,8 @@ const SystemManagement = () => {
     useState<MigrationPreview | null>(null);
   const [integrityResult, setIntegrityResult] =
     useState<IntegrityCheckResult | null>(null);
+  const [migrationPreviewSupported, setMigrationPreviewSupported] = useState(true);
+  const [integrityCheckSupported, setIntegrityCheckSupported] = useState(true);
   const [selectedVehicleModel, setSelectedVehicleModel] = useState<
     number | null
   >(null);
@@ -242,9 +244,15 @@ const SystemManagement = () => {
         params.production_line_id = selectedProductionLine;
 
       const response = await api.get('/migration/preview', { params });
+      setMigrationPreviewSupported(true);
       setMigrationPreview(response.data);
       setPreviewModalVisible(true);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.response?.status === 404 || error?.response?.status === 405) {
+        setMigrationPreviewSupported(false);
+        message.info('当前环境未启用迁移预览');
+        return;
+      }
       console.error('Failed to load migration preview:', error);
       message.error('加载迁移预览失败');
     }
@@ -271,6 +279,7 @@ const SystemManagement = () => {
   const checkFileIntegrity = async () => {
     try {
       const response = await api.get('/files/integrity-check');
+      setIntegrityCheckSupported(true);
       setIntegrityResult(response.data);
       if (response.data.missing_count > 0) {
         message.warning(`发现 ${response.data.missing_count} 个缺失文件记录`);
@@ -278,6 +287,12 @@ const SystemManagement = () => {
         message.success('文件完整性检查通过，未发现缺失文件');
       }
     } catch (error: any) {
+      if (error?.response?.status === 404 || error?.response?.status === 405) {
+        setIntegrityCheckSupported(false);
+        setIntegrityResult(null);
+        message.info('当前环境未启用文件完整性检查');
+        return;
+      }
       console.error('Failed to check file integrity:', error);
       message.error(error.response?.data?.error || '文件完整性检查失败');
     }
@@ -866,6 +881,7 @@ const SystemManagement = () => {
                     <Button
                       icon={<EyeOutlined />}
                       onClick={loadMigrationPreview}
+                      disabled={!migrationPreviewSupported}
                     >
                       预览迁移
                     </Button>
@@ -914,10 +930,10 @@ const SystemManagement = () => {
 
                 <Card title="文件完整性检查" style={{ marginTop: 16 }}>
                   <Space style={{ marginBottom: 16 }}>
-                    <Button icon={<EyeOutlined />} onClick={checkFileIntegrity}>
+                    <Button icon={<EyeOutlined />} onClick={checkFileIntegrity} disabled={!integrityCheckSupported}>
                       检查完整性
                     </Button>
-                    <Button danger onClick={cleanupMissingFiles} disabled={!integrityResult || integrityResult.missing_count === 0}>
+                    <Button danger onClick={cleanupMissingFiles} disabled={!integrityCheckSupported || !integrityResult || integrityResult.missing_count === 0}>
                       清理缺失记录
                     </Button>
                   </Space>
