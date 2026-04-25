@@ -47,7 +47,7 @@ func GetVehicleModels(c *gin.Context) {
 		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
-	if allowedLineIDs != nil && scope != "selector" {
+	if allowedLineIDs != nil {
 		lineIDs := make([]uint, 0, len(allowedLineIDs))
 		for lineID := range allowedLineIDs {
 			lineIDs = append(lineIDs, lineID)
@@ -60,17 +60,30 @@ func GetVehicleModels(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"items": []models.VehicleModel{}, "total": 0, "page": page, "page_size": pageSize})
 			return
 		}
-		subQuery := database.DB.Model(&models.Program{}).Select("DISTINCT vehicle_model_id").Where("production_line_id IN ? AND vehicle_model_id <> 0", lineIDs)
-		query = query.Where("id IN (?)", subQuery)
-	}
 
-	if allowedLineIDs != nil && scope == "selector" && len(allowedLineIDs) == 0 {
-		if !paged {
-			c.JSON(http.StatusOK, []models.VehicleModel{})
-			return
+		if scope == "selector" {
+			visibleModelIDs := database.DB.Raw(`
+				SELECT programs.vehicle_model_id AS id
+				FROM programs
+				WHERE programs.production_line_id IN ?
+					AND programs.vehicle_model_id <> 0
+					AND programs.deleted_at IS NULL
+				UNION
+				SELECT vehicle_models.id AS id
+				FROM vehicle_models
+				WHERE vehicle_models.deleted_at IS NULL
+					AND NOT EXISTS (
+						SELECT 1
+						FROM programs
+						WHERE programs.vehicle_model_id = vehicle_models.id
+							AND programs.deleted_at IS NULL
+					)
+			`, lineIDs)
+			query = query.Where("id IN (?)", visibleModelIDs)
+		} else {
+			subQuery := database.DB.Model(&models.Program{}).Select("DISTINCT vehicle_model_id").Where("production_line_id IN ? AND vehicle_model_id <> 0", lineIDs)
+			query = query.Where("id IN (?)", subQuery)
 		}
-		c.JSON(http.StatusOK, gin.H{"items": []models.VehicleModel{}, "total": 0, "page": page, "page_size": pageSize})
-		return
 	}
 
 	if series := strings.TrimSpace(c.Query("series")); series != "" {
