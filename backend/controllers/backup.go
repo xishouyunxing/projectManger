@@ -463,6 +463,8 @@ func createZipBackup(sourceDir, targetPath string) error {
 	zipWriter := zip.NewWriter(zipFile)
 	defer zipWriter.Close()
 
+	rootName := filepath.Base(filepath.Clean(sourceDir))
+
 	return filepath.Walk(sourceDir, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -473,15 +475,23 @@ func createZipBackup(sourceDir, targetPath string) error {
 		if err != nil {
 			return err
 		}
+		if relPath == "." {
+			if info.IsDir() {
+				_, err = zipWriter.Create(rootName + "/")
+			}
+			return err
+		}
+
+		entryPath := filepath.ToSlash(filepath.Join(rootName, relPath))
 
 		// 如果是目录，创建目录条目
 		if info.IsDir() {
-			_, err = zipWriter.Create(relPath + "/")
+			_, err = zipWriter.Create(entryPath + "/")
 			return err
 		}
 
 		// 创建文件条目
-		fileWriter, err := zipWriter.Create(relPath)
+		fileWriter, err := zipWriter.Create(entryPath)
 		if err != nil {
 			return err
 		}
@@ -491,11 +501,14 @@ func createZipBackup(sourceDir, targetPath string) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
 
 		// 复制文件内容
-		_, err = io.Copy(fileWriter, file)
-		return err
+		_, copyErr := io.Copy(fileWriter, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
 }
 
@@ -511,12 +524,15 @@ func extractZipBackup(zipPath, targetDir string) error {
 		filePath := filepath.Join(targetDir, file.Name)
 
 		// 检查路径安全性
-		if !strings.HasPrefix(filepath.Clean(filePath), filepath.Clean(targetDir)) {
-			continue // 跳过不安全的路径
+		relPath, err := filepath.Rel(filepath.Clean(targetDir), filepath.Clean(filePath))
+		if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || filepath.IsAbs(relPath) {
+			return fmt.Errorf("unsafe archive path: %s", file.Name)
 		}
 
 		if file.FileInfo().IsDir() {
-			os.MkdirAll(filePath, file.FileInfo().Mode())
+			if err := os.MkdirAll(filePath, file.FileInfo().Mode()); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -530,19 +546,26 @@ func extractZipBackup(zipPath, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		defer fileReader.Close()
 
 		// 创建目标文件
 		targetFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.FileInfo().Mode())
 		if err != nil {
+			_ = fileReader.Close()
 			return err
 		}
-		defer targetFile.Close()
 
 		// 复制文件内容
-		_, err = io.Copy(targetFile, fileReader)
-		if err != nil {
-			return err
+		_, copyErr := io.Copy(targetFile, fileReader)
+		closeTargetErr := targetFile.Close()
+		closeReaderErr := fileReader.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeTargetErr != nil {
+			return closeTargetErr
+		}
+		if closeReaderErr != nil {
+			return closeReaderErr
 		}
 	}
 
@@ -681,6 +704,6 @@ func createEmptyZip(targetPath string) error {
 	defer zipWriter.Close()
 
 	// 创建一个空的目录条目表示上传目录
-	_, err = zipWriter.Create("uploads/")
+	_, err = zipWriter.Create(filepath.Base(utils.UploadDir()) + "/")
 	return err
 }

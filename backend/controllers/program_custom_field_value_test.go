@@ -3,8 +3,6 @@ package controllers
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +11,6 @@ import (
 	"crane-system/database"
 	"crane-system/middleware"
 	"crane-system/models"
-	"encoding/json"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +26,7 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 			programs.GET("", GetPrograms)
 			programs.GET("/export/excel", ExportProgramsExcel)
 			programs.GET("/:id", GetProgram)
+			programs.POST("", CreateProgram)
 			programs.PUT("/:id", UpdateProgram)
 			programs.PUT("/:id/custom-field-values", SaveProgramCustomFieldValues)
 			programs.DELETE("/:id", DeleteProgram)
@@ -60,8 +58,14 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 			files.GET("/program/:program_id", GetProgramFiles)
 			files.DELETE("/:id", DeleteFile)
 		}
+		vehicleModels := api.Group("/vehicle-models")
+		{
+			vehicleModels.GET("", GetVehicleModels)
+			vehicleModels.GET("/:id", GetVehicleModel)
+		}
 		versions := api.Group("/versions")
 		{
+			versions.POST("", CreateVersion)
 			versions.PUT("/:id", UpdateVersion)
 			versions.POST("/:id/activate", ActivateVersion)
 		}
@@ -98,6 +102,17 @@ func programListPath() string {
 	return "/api/programs"
 }
 
+func vehicleModelListPath(scope string) string {
+	if strings.TrimSpace(scope) == "" {
+		return "/api/vehicle-models"
+	}
+	return fmt.Sprintf("/api/vehicle-models?scope=%s", scope)
+}
+
+func vehicleModelDetailPath(vehicleModelID uint) string {
+	return fmt.Sprintf("/api/vehicle-models/%d", vehicleModelID)
+}
+
 func programMappingsByParentPath(programID string) string {
 	return fmt.Sprintf("/api/program-mappings/by-parent/%s", programID)
 }
@@ -119,6 +134,49 @@ func setupProgramCustomFieldValueTest(t *testing.T) (*gin.Engine, string, models
 		t.Fatalf("create program: %v", err)
 	}
 	return setupProgramCustomFieldValueTestRouter(), token, line, program
+}
+
+func setupVehicleModelPermissionTest(t *testing.T) (*gin.Engine, string, models.ProductionLine, models.ProductionLine) {
+	t.Helper()
+	database.DB = openProductionLineCustomFieldTestDB(t)
+
+	process := models.Process{Name: "总装", Code: "PROC-VM-001", Type: "upper"}
+	if err := database.DB.Create(&process).Error; err != nil {
+		t.Fatalf("create process: %v", err)
+	}
+
+	lineA := models.ProductionLine{Name: "产线A", Code: "LINE-VM-001", Type: "upper", Status: "active", ProcessID: &process.ID}
+	if err := database.DB.Create(&lineA).Error; err != nil {
+		t.Fatalf("create lineA: %v", err)
+	}
+
+	lineB := models.ProductionLine{Name: "产线B", Code: "LINE-VM-002", Type: "upper", Status: "active", ProcessID: &process.ID}
+	if err := database.DB.Create(&lineB).Error; err != nil {
+		t.Fatalf("create lineB: %v", err)
+	}
+
+	user := models.User{
+		Name:       "Vehicle Viewer",
+		Password:   "hashed",
+		EmployeeID: "EMP-VM-001",
+		Role:       "user",
+		Status:     "active",
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	permission := models.UserPermission{
+		UserID:           user.ID,
+		ProductionLineID: lineA.ID,
+		CanView:          true,
+	}
+	if err := database.DB.Create(&permission).Error; err != nil {
+		t.Fatalf("create permission: %v", err)
+	}
+
+	token := createUserTokenForTest(t, user.ID, "user")
+	return setupProgramCustomFieldValueTestRouter(), token, lineA, lineB
 }
 
 func TestSaveProgramCustomFieldValuesReplacesCurrentSet(t *testing.T) {
@@ -498,6 +556,122 @@ func TestUpdateProgramClearsCustomFieldValuesWhenProductionLineChanges(t *testin
 	}
 }
 
+func TestUpdateProgramAppliesCustomFieldValuesAtomically(t *testing.T) {
+	r, token, line, program := setupProgramCustomFieldValueTest(t)
+	validField := models.ProductionLineCustomField{ProductionLineID: line.ID, Name: "澶囨敞", FieldType: "text", Enabled: true}
+	if err := database.DB.Create(&validField).Error; err != nil {
+		t.Fatalf("create valid field: %v", err)
+	}
+
+	otherLine := models.ProductionLine{Name: "浜х嚎C", Code: "LINE-003", Type: "upper", Status: "active", ProcessID: line.ProcessID}
+	if err := database.DB.Create(&otherLine).Error; err != nil {
+		t.Fatalf("create other line: %v", err)
+	}
+	foreignField := models.ProductionLineCustomField{ProductionLineID: otherLine.ID, Name: "澶栭儴瀛楁", FieldType: "text", Enabled: true}
+	if err := database.DB.Create(&foreignField).Error; err != nil {
+		t.Fatalf("create foreign field: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"name": program.Name + "-updated",
+		"custom_field_values": []map[string]any{
+			{"field_id": foreignField.ID, "value": "invalid"},
+		},
+	})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected update status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var reloaded models.Program
+	if err := database.DB.First(&reloaded, program.ID).Error; err != nil {
+		t.Fatalf("reload program: %v", err)
+	}
+	if reloaded.Name != program.Name {
+		t.Fatalf("expected program name to remain %q, got %q", program.Name, reloaded.Name)
+	}
+
+	resp = performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"name": program.Name + "-updated",
+		"custom_field_values": []map[string]any{
+			{"field_id": validField.ID, "value": "ok"},
+		},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected update status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var values []models.ProgramCustomFieldValue
+	if err := database.DB.Where("program_id = ?", program.ID).Find(&values).Error; err != nil {
+		t.Fatalf("reload custom field values: %v", err)
+	}
+	if len(values) != 1 || values[0].ProductionLineCustomFieldID != validField.ID || values[0].Value != "ok" {
+		t.Fatalf("unexpected custom field values: %#v", values)
+	}
+}
+
+func TestCreateProgramAppliesCustomFieldValuesAtomically(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+	validField := models.ProductionLineCustomField{ProductionLineID: line.ID, Name: "澶囨敞", FieldType: "text", Enabled: true}
+	if err := database.DB.Create(&validField).Error; err != nil {
+		t.Fatalf("create valid field: %v", err)
+	}
+
+	otherLine := models.ProductionLine{Name: "浜х嚎D", Code: "LINE-004", Type: "upper", Status: "active", ProcessID: line.ProcessID}
+	if err := database.DB.Create(&otherLine).Error; err != nil {
+		t.Fatalf("create other line: %v", err)
+	}
+	foreignField := models.ProductionLineCustomField{ProductionLineID: otherLine.ID, Name: "澶栭儴瀛楁", FieldType: "text", Enabled: true}
+	if err := database.DB.Create(&foreignField).Error; err != nil {
+		t.Fatalf("create foreign field: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/programs", token, map[string]any{
+		"name":               "Atomic Create",
+		"code":               "ATOMIC-001",
+		"production_line_id": line.ID,
+		"status":             "active",
+		"custom_field_values": []map[string]any{
+			{"field_id": foreignField.ID, "value": "invalid"},
+		},
+	})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected create status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var count int64
+	if err := database.DB.Model(&models.Program{}).Where("code = ?", "ATOMIC-001").Count(&count).Error; err != nil {
+		t.Fatalf("count created programs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected failed create to leave no program rows, count=%d", count)
+	}
+
+	resp = performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/programs", token, map[string]any{
+		"name":               "Atomic Create",
+		"code":               "ATOMIC-001",
+		"production_line_id": line.ID,
+		"status":             "active",
+		"custom_field_values": []map[string]any{
+			{"field_id": validField.ID, "value": "ok"},
+		},
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var created models.Program
+	if err := database.DB.Where("code = ?", "ATOMIC-001").First(&created).Error; err != nil {
+		t.Fatalf("load created program: %v", err)
+	}
+	var values []models.ProgramCustomFieldValue
+	if err := database.DB.Where("program_id = ?", created.ID).Find(&values).Error; err != nil {
+		t.Fatalf("load created custom field values: %v", err)
+	}
+	if len(values) != 1 || values[0].ProductionLineCustomFieldID != validField.ID || values[0].Value != "ok" {
+		t.Fatalf("unexpected created custom field values: %#v", values)
+	}
+}
+
 func TestProgramMappingRejectsInvalidIDFormat(t *testing.T) {
 	r, token, _, _ := setupProgramCustomFieldValueTest(t)
 
@@ -591,6 +765,42 @@ func TestFileAndVersionRouteIDValidation(t *testing.T) {
 	activateVersionResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/versions/abc/activate", token, nil)
 	if activateVersionResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected activate version status 400, got %d body=%s", activateVersionResp.Code, activateVersionResp.Body.String())
+	}
+}
+
+func TestCreateVersionRejectsMismatchedFileVersion(t *testing.T) {
+	r, token, _, program := setupProgramCustomFieldValueTest(t)
+
+	file := models.ProgramFile{
+		ProgramID:   program.ID,
+		FileName:    "demo.nc",
+		FilePath:    "demo.nc",
+		FileSize:    10,
+		FileType:    ".nc",
+		Version:     "v1",
+		UploadedBy:  1,
+		Description: "seed",
+	}
+	if err := database.DB.Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/versions", token, map[string]any{
+		"program_id": program.ID,
+		"version":    "v2",
+		"file_id":    file.ID,
+		"change_log": "manual",
+	})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected create version status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var versionCount int64
+	if err := database.DB.Model(&models.ProgramVersion{}).Where("program_id = ?", program.ID).Count(&versionCount).Error; err != nil {
+		t.Fatalf("count versions: %v", err)
+	}
+	if versionCount != 0 {
+		t.Fatalf("expected no version rows to be created, count=%d", versionCount)
 	}
 }
 
@@ -765,21 +975,14 @@ func TestBatchImportProgramsRejectsMissingProductionLineID(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	preview := batchUploadPreview{
-		TempDir:       tmpDir,
 		TotalPrograms: 1,
 		TotalFiles:    1,
 		Workstations:  []batchUploadWorkstation{{Name: "WS-01", Programs: []batchUploadProgram{{Name: "P1"}}}},
 	}
-	previewBytes, err := json.Marshal(preview)
-	if err != nil {
-		t.Fatalf("marshal preview: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "preview.json"), previewBytes, 0o644); err != nil {
-		t.Fatalf("write preview: %v", err)
-	}
+	previewID := createBatchPreview(preview, tmpDir, 1)
 
 	payload := map[string]any{
-		"temp_dir": tmpDir,
+		"preview_id": previewID,
 		"mappings": []map[string]any{
 			{"workstation_name": "WS-01", "production_line_id": nil, "vehicle_model_id": nil},
 		},
@@ -790,7 +993,313 @@ func TestBatchImportProgramsRejectsMissingProductionLineID(t *testing.T) {
 	}
 
 	body := decodeProductionLineCustomFieldResponse[map[string]any](t, resp)
-	if msg, _ := body["error"].(string); !strings.Contains(msg, "production_line_id不能为空") {
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "production_line_id is required") {
 		t.Fatalf("expected missing production_line_id error, got %v", body)
 	}
+}
+
+type getProgramFilesResponse struct {
+	ProgramID     uint                     `json:"program_id"`
+	Versions      []getProgramFilesVersion `json:"versions"`
+	TotalVersions int                      `json:"total_versions"`
+	Page          int                      `json:"page"`
+	PageSize      int                      `json:"page_size"`
+}
+
+type getProgramFilesVersion struct {
+	ID        uint                 `json:"id"`
+	Version   string               `json:"version"`
+	ChangeLog string               `json:"change_log"`
+	IsCurrent bool                 `json:"is_current"`
+	FileCount int                  `json:"file_count"`
+	Files     []models.ProgramFile `json:"files"`
+}
+
+func TestGetProgramFilesPaginatesVersionHeadersAndKeepsFileOnlyVersions(t *testing.T) {
+	r, token, _, program := setupProgramCustomFieldValueTest(t)
+	baseTime := time.Now().UTC().Add(-6 * time.Hour)
+
+	seedFile := func(version, name, description string, createdAt time.Time) models.ProgramFile {
+		file := models.ProgramFile{
+			ProgramID:   program.ID,
+			FileName:    name,
+			FilePath:    name,
+			FileSize:    10,
+			FileType:    ".nc",
+			Version:     version,
+			UploadedBy:  1,
+			Description: description,
+			CreatedAt:   createdAt,
+			UpdatedAt:   createdAt,
+		}
+		if err := database.DB.Create(&file).Error; err != nil {
+			t.Fatalf("create file %s: %v", name, err)
+		}
+		return file
+	}
+
+	v1a := seedFile("v1", "v1-a.nc", "v1 first", baseTime.Add(1*time.Hour))
+	v1b := seedFile("v1", "v1-b.nc", "v1 second", baseTime.Add(2*time.Hour))
+	v2 := seedFile("v2", "v2-a.nc", "v2 payload", baseTime.Add(4*time.Hour))
+	_ = v2
+	v3 := seedFile("v3", "v3-a.nc", "orphan payload", baseTime.Add(5*time.Hour))
+	_ = v3
+
+	versions := []models.ProgramVersion{
+		{
+			ProgramID:  program.ID,
+			Version:    "v1",
+			FileID:     v1b.ID,
+			UploadedBy: 1,
+			ChangeLog:  "v1 log",
+			IsCurrent:  false,
+			CreatedAt:  baseTime.Add(3 * time.Hour),
+			UpdatedAt:  baseTime.Add(3 * time.Hour),
+		},
+		{
+			ProgramID:  program.ID,
+			Version:    "v2",
+			FileID:     v2.ID,
+			UploadedBy: 1,
+			ChangeLog:  "v2 log",
+			IsCurrent:  true,
+			CreatedAt:  baseTime.Add(4*time.Hour + 30*time.Minute),
+			UpdatedAt:  baseTime.Add(4*time.Hour + 30*time.Minute),
+		},
+	}
+	for _, version := range versions {
+		version := version
+		if err := database.DB.Create(&version).Error; err != nil {
+			t.Fatalf("create version %s: %v", version.Version, err)
+		}
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/files/program/%d?page=1&page_size=2", program.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	pageOne := decodeProductionLineCustomFieldResponse[getProgramFilesResponse](t, resp)
+	if pageOne.TotalVersions != 3 {
+		t.Fatalf("expected 3 total versions, got %+v", pageOne)
+	}
+	if len(pageOne.Versions) != 2 {
+		t.Fatalf("expected 2 versions on page 1, got %+v", pageOne.Versions)
+	}
+	if pageOne.Versions[0].Version != "v3" || pageOne.Versions[0].ID != 0 || pageOne.Versions[0].ChangeLog != "orphan payload" || pageOne.Versions[0].FileCount != 1 {
+		t.Fatalf("unexpected first page version payload: %+v", pageOne.Versions[0])
+	}
+	if pageOne.Versions[0].IsCurrent {
+		t.Fatalf("expected file-only version v3 to not be current while v2 is current: %+v", pageOne.Versions[0])
+	}
+	if pageOne.Versions[1].Version != "v2" || !pageOne.Versions[1].IsCurrent || pageOne.Versions[1].ChangeLog != "v2 log" || pageOne.Versions[1].FileCount != 1 {
+		t.Fatalf("unexpected second page version payload: %+v", pageOne.Versions[1])
+	}
+
+	resp = performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/files/program/%d?page=2&page_size=2", program.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200 on page 2, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	pageTwo := decodeProductionLineCustomFieldResponse[getProgramFilesResponse](t, resp)
+	if len(pageTwo.Versions) != 1 {
+		t.Fatalf("expected 1 version on page 2, got %+v", pageTwo.Versions)
+	}
+	if pageTwo.Versions[0].Version != "v1" || pageTwo.Versions[0].FileCount != 2 || pageTwo.Versions[0].ChangeLog != "v1 log" {
+		t.Fatalf("unexpected page 2 version payload: %+v", pageTwo.Versions[0])
+	}
+	if len(pageTwo.Versions[0].Files) != 2 {
+		t.Fatalf("expected both v1 files on page 2, got %+v", pageTwo.Versions[0].Files)
+	}
+	if pageTwo.Versions[0].Files[0].ID != v1b.ID || pageTwo.Versions[0].Files[1].ID != v1a.ID {
+		t.Fatalf("expected v1 files ordered by created_at desc, got %+v", pageTwo.Versions[0].Files)
+	}
+}
+
+func TestGetProgramFilesMarksNewestVersionCurrentWhenVersionRowsAreMissing(t *testing.T) {
+	r, token, _, program := setupProgramCustomFieldValueTest(t)
+	baseTime := time.Now().UTC().Add(-2 * time.Hour)
+
+	files := []models.ProgramFile{
+		{
+			ProgramID:   program.ID,
+			FileName:    "older.nc",
+			FilePath:    "older.nc",
+			FileSize:    10,
+			FileType:    ".nc",
+			Version:     "older",
+			UploadedBy:  1,
+			Description: "older payload",
+			CreatedAt:   baseTime,
+			UpdatedAt:   baseTime,
+		},
+		{
+			ProgramID:   program.ID,
+			FileName:    "newer.nc",
+			FilePath:    "newer.nc",
+			FileSize:    10,
+			FileType:    ".nc",
+			Version:     "newer",
+			UploadedBy:  1,
+			Description: "newer payload",
+			CreatedAt:   baseTime.Add(time.Hour),
+			UpdatedAt:   baseTime.Add(time.Hour),
+		},
+	}
+	for _, file := range files {
+		file := file
+		if err := database.DB.Create(&file).Error; err != nil {
+			t.Fatalf("create file %s: %v", file.Version, err)
+		}
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/files/program/%d?page=1&page_size=10", program.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	payload := decodeProductionLineCustomFieldResponse[getProgramFilesResponse](t, resp)
+	if len(payload.Versions) != 2 {
+		t.Fatalf("expected 2 versions, got %+v", payload.Versions)
+	}
+	if payload.Versions[0].Version != "newer" || !payload.Versions[0].IsCurrent {
+		t.Fatalf("expected newest file-only version to be marked current, got %+v", payload.Versions[0])
+	}
+	if payload.Versions[1].Version != "older" || payload.Versions[1].IsCurrent {
+		t.Fatalf("expected older version to remain non-current, got %+v", payload.Versions[1])
+	}
+}
+
+func TestGetVehicleModelFiltersProgramsToAuthorizedLines(t *testing.T) {
+	r, token, lineA, lineB := setupVehicleModelPermissionTest(t)
+
+	vehicleModel := models.VehicleModel{Name: "车型A", Code: "VM-001", Status: "active"}
+	if err := database.DB.Create(&vehicleModel).Error; err != nil {
+		t.Fatalf("create vehicle model: %v", err)
+	}
+
+	allowedProgram := models.Program{
+		Name:             "授权程序",
+		Code:             "PROG-VM-001",
+		ProductionLineID: lineA.ID,
+		VehicleModelID:   vehicleModel.ID,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&allowedProgram).Error; err != nil {
+		t.Fatalf("create allowed program: %v", err)
+	}
+
+	blockedProgram := models.Program{
+		Name:             "未授权程序",
+		Code:             "PROG-VM-002",
+		ProductionLineID: lineB.ID,
+		VehicleModelID:   vehicleModel.ID,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&blockedProgram).Error; err != nil {
+		t.Fatalf("create blocked program: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, vehicleModelDetailPath(vehicleModel.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	payload := decodeProductionLineCustomFieldResponse[models.VehicleModel](t, resp)
+	if len(payload.Programs) != 1 {
+		t.Fatalf("expected 1 visible program, got %#v", payload.Programs)
+	}
+	if payload.Programs[0].ID != allowedProgram.ID {
+		t.Fatalf("expected only allowed program %d, got %#v", allowedProgram.ID, payload.Programs)
+	}
+	if payload.Programs[0].ProductionLineID != lineA.ID {
+		t.Fatalf("expected visible program on line %d, got %#v", lineA.ID, payload.Programs[0])
+	}
+}
+
+func TestGetVehicleModelsSelectorScopeIncludesUnassignedModels(t *testing.T) {
+	r, token, lineA, _ := setupVehicleModelPermissionTest(t)
+
+	assignedModel := models.VehicleModel{Name: "已绑定车型", Code: "VM-010", Status: "active"}
+	if err := database.DB.Create(&assignedModel).Error; err != nil {
+		t.Fatalf("create assigned model: %v", err)
+	}
+	unassignedModel := models.VehicleModel{Name: "待选择车型", Code: "VM-011", Status: "active"}
+	if err := database.DB.Create(&unassignedModel).Error; err != nil {
+		t.Fatalf("create unassigned model: %v", err)
+	}
+
+	program := models.Program{
+		Name:             "已有程序",
+		Code:             "PROG-VM-010",
+		ProductionLineID: lineA.ID,
+		VehicleModelID:   assignedModel.ID,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&program).Error; err != nil {
+		t.Fatalf("create program: %v", err)
+	}
+
+	defaultResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, vehicleModelListPath(""), token, nil)
+	if defaultResp.Code != http.StatusOK {
+		t.Fatalf("expected default list status 200, got %d body=%s", defaultResp.Code, defaultResp.Body.String())
+	}
+
+	defaultPayload := decodeProductionLineCustomFieldResponse[[]models.VehicleModel](t, defaultResp)
+	if len(defaultPayload) != 1 || defaultPayload[0].ID != assignedModel.ID {
+		t.Fatalf("expected only assigned model in default list, got %#v", defaultPayload)
+	}
+
+	selectorResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, vehicleModelListPath("selector"), token, nil)
+	if selectorResp.Code != http.StatusOK {
+		t.Fatalf("expected selector list status 200, got %d body=%s", selectorResp.Code, selectorResp.Body.String())
+	}
+
+	selectorPayload := decodeProductionLineCustomFieldResponse[[]models.VehicleModel](t, selectorResp)
+	if len(selectorPayload) != 2 {
+		t.Fatalf("expected 2 models in selector scope, got %#v", selectorPayload)
+	}
+	if !vehicleModelIDsContain(selectorPayload, assignedModel.ID) {
+		t.Fatalf("expected selector list to include assigned model %d, got %#v", assignedModel.ID, selectorPayload)
+	}
+	if !vehicleModelIDsContain(selectorPayload, unassignedModel.ID) {
+		t.Fatalf("expected selector list to include unassigned model %d, got %#v", unassignedModel.ID, selectorPayload)
+	}
+}
+
+func TestUpdateProgramAllowsClearingVehicleModelID(t *testing.T) {
+	r, token, _, program := setupProgramCustomFieldValueTest(t)
+
+	vehicleModel := models.VehicleModel{Name: "待清空车型", Code: "VM-CLEAR-001", Status: "active"}
+	if err := database.DB.Create(&vehicleModel).Error; err != nil {
+		t.Fatalf("create vehicle model: %v", err)
+	}
+
+	if err := database.DB.Model(&models.Program{}).Where("id = ?", program.ID).Update("vehicle_model_id", vehicleModel.ID).Error; err != nil {
+		t.Fatalf("assign vehicle model: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"vehicle_model_id": nil,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var updated models.Program
+	if err := database.DB.First(&updated, program.ID).Error; err != nil {
+		t.Fatalf("reload program: %v", err)
+	}
+	if updated.VehicleModelID != 0 {
+		t.Fatalf("expected vehicle_model_id to be cleared, got %d", updated.VehicleModelID)
+	}
+}
+
+func vehicleModelIDsContain(models []models.VehicleModel, targetID uint) bool {
+	for _, model := range models {
+		if model.ID == targetID {
+			return true
+		}
+	}
+	return false
 }

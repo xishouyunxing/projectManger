@@ -4,17 +4,22 @@ import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn';
-import Layout from './components/Layout';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import PrivateRoute from './components/PrivateRoute';
+import AdminRoute from './components/AdminRoute';
 
+const Layout = lazy(() => import('./components/Layout'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProgramManagement = lazy(() => import('./pages/ProgramManagement'));
 const UserManagement = lazy(() => import('./pages/UserManagement'));
-const ProductionLineManagement = lazy(() => import('./pages/ProductionLineManagement'));
-const VehicleModelManagement = lazy(() => import('./pages/VehicleModelManagement'));
+const ProductionLineManagement = lazy(
+  () => import('./pages/ProductionLineManagement'),
+);
+const VehicleModelManagement = lazy(
+  () => import('./pages/VehicleModelManagement'),
+);
 const PermissionManagement = lazy(() => import('./pages/PermissionManagement'));
 const SystemManagement = lazy(() => import('./pages/SystemManagement'));
 const FileIgnoreList = lazy(() => import('./pages/FileIgnoreList'));
@@ -28,7 +33,13 @@ function App() {
     <ConfigProvider locale={zhCN}>
       <ThemeProvider>
         <AuthProvider>
-          <Suspense fallback={<div style={{ padding: 40, textAlign: 'center' }}>页面加载中...</div>}>
+          <Suspense
+            fallback={
+              <div style={{ padding: 40, textAlign: 'center' }}>
+                页面加载中...
+              </div>
+            }
+          >
             <BrowserRouter
               future={{
                 v7_startTransition: true,
@@ -48,19 +59,51 @@ function App() {
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
                   <Route path="programs" element={<ProgramManagement />} />
-                  <Route path="users" element={<UserManagement />} />
+                  <Route
+                    path="users"
+                    element={
+                      <AdminRoute>
+                        <UserManagement />
+                      </AdminRoute>
+                    }
+                  />
                   <Route
                     path="production-lines"
-                    element={<ProductionLineManagement />}
+                    element={
+                      <AdminRoute>
+                        <ProductionLineManagement />
+                      </AdminRoute>
+                    }
                   />
                   <Route
                     path="vehicle-models"
-                    element={<VehicleModelManagement />}
+                    element={
+                      <AdminRoute>
+                        <VehicleModelManagement />
+                      </AdminRoute>
+                    }
                   />
-                  <Route path="permissions" element={<PermissionManagement />} />
+                  <Route
+                    path="permissions"
+                    element={
+                      <AdminRoute>
+                        <PermissionManagement />
+                      </AdminRoute>
+                    }
+                  />
                   <Route path="file-ignore-list" element={<FileIgnoreList />} />
-                  <Route path="system-management" element={<SystemManagement />} />
-                  <Route path="program-matrix" element={<ProgramMatrixPreview />} />
+                  <Route
+                    path="system-management"
+                    element={
+                      <AdminRoute>
+                        <SystemManagement />
+                      </AdminRoute>
+                    }
+                  />
+                  <Route
+                    path="program-matrix"
+                    element={<ProgramMatrixPreview />}
+                  />
                 </Route>
               </Routes>
             </BrowserRouter>

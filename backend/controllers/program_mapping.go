@@ -15,11 +15,11 @@ type createProgramMappingsRequest struct {
 }
 
 type programMappingItem struct {
-	ID           uint           `json:"id"`
-	Parent       models.Program `json:"parent_program"`
-	Child        models.Program `json:"child_program"`
-	CreatedBy    uint           `json:"created_by"`
-	CreatedAt    string         `json:"created_at"`
+	ID        uint           `json:"id"`
+	Parent    models.Program `json:"parent_program"`
+	Child     models.Program `json:"child_program"`
+	CreatedBy uint           `json:"created_by"`
+	CreatedAt string         `json:"created_at"`
 }
 
 func resolveProgramTarget(tx *gorm.DB, programID uint) (models.Program, uint, *models.ProgramMapping, error) {
@@ -67,10 +67,10 @@ func attachProgramMappingInfo(tx *gorm.DB, program *models.Program) error {
 	var mapping models.ProgramMapping
 	if err := tx.Preload("ParentProgram").Where("child_program_id = ?", program.ID).First(&mapping).Error; err == nil {
 		program.MappingInfo = &models.ProgramMappingInfo{
-			MappingID:          mapping.ID,
-			ParentProgramID:    mapping.ParentProgram.ID,
-			ParentProgramName:  mapping.ParentProgram.Name,
-			ParentProgramCode:  mapping.ParentProgram.Code,
+			MappingID:         mapping.ID,
+			ParentProgramID:   mapping.ParentProgram.ID,
+			ParentProgramName: mapping.ParentProgram.Name,
+			ParentProgramCode: mapping.ParentProgram.Code,
 		}
 	}
 
@@ -93,7 +93,7 @@ func applyParentProgramData(child *models.Program, parent models.Program) {
 func GetProgramMappingsByParent(c *gin.Context) {
 	parentProgramID, err := parseUintParam(c.Param("program_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	if !authorizeProgramAction(c, database.DB, parentProgramID, lineActionView) {
@@ -107,9 +107,23 @@ func GetProgramMappingsByParent(c *gin.Context) {
 		Where("parent_program_id = ?", parentProgramID).
 		Order("created_at DESC").
 		Find(&mappings).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
+
+	filteredMappings := make([]models.ProgramMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		allowed, statusCode, message := checkLineAction(c, mapping.ChildProgram.ProductionLineID, lineActionView)
+		if !allowed {
+			if statusCode == http.StatusForbidden {
+				continue
+			}
+			c.JSON(statusCode, gin.H{"error": message})
+			return
+		}
+		filteredMappings = append(filteredMappings, mapping)
+	}
+	mappings = filteredMappings
 
 	childProgramIDs := make([]uint, 0, len(mappings))
 	for _, mapping := range mappings {
@@ -117,12 +131,12 @@ func GetProgramMappingsByParent(c *gin.Context) {
 	}
 	versionCounts, err := buildProgramVersionCountMap(database.DB, childProgramIDs)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 	fileCounts, err := buildProgramFileCountMap(database.DB, childProgramIDs)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
@@ -144,7 +158,7 @@ func GetProgramMappingsByParent(c *gin.Context) {
 func GetProgramMappingByChild(c *gin.Context) {
 	childProgramID, err := parseUintParam(c.Param("program_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	if !authorizeProgramAction(c, database.DB, childProgramID, lineActionView) {
@@ -161,12 +175,22 @@ func GetProgramMappingByChild(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
 	if err := attachProgramMappingInfo(database.DB, &mapping.ChildProgram); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
+		return
+	}
+
+	allowed, statusCode, message := checkLineAction(c, mapping.ParentProgram.ProductionLineID, lineActionView)
+	if !allowed {
+		if statusCode == http.StatusForbidden {
+			c.JSON(http.StatusOK, gin.H{})
+			return
+		}
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
@@ -180,18 +204,18 @@ func CreateProgramMappings(c *gin.Context) {
 		return
 	}
 	if len(req.ChildProgramIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "child_program_ids 不能为空"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "child_program_ids ????"})
 		return
 	}
 
 	parentProgramIDValue, ok := c.GetQuery("parent_program_id")
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 parent_program_id 参数"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "?? parent_program_id ??"})
 		return
 	}
 	parentProgramID, err := parseUintParam(parentProgramIDValue)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "父程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "???ID????"})
 		return
 	}
 
@@ -201,7 +225,7 @@ func CreateProgramMappings(c *gin.Context) {
 
 	var parentProgram models.Program
 	if err := database.DB.First(&parentProgram, parentProgramID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "父程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "??????"})
 		return
 	}
 
@@ -211,17 +235,21 @@ func CreateProgramMappings(c *gin.Context) {
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, childID := range req.ChildProgramIDs {
 			if childID == 0 || childID == parentProgram.ID {
-				return errors.New("不能将程序映射到自己")
+				return errors.New("??????????")
 			}
 
 			var childProgram models.Program
 			if err := tx.First(&childProgram, childID).Error; err != nil {
-				return errors.New("子程序不存在")
+				return errors.New("??????")
+			}
+			allowed, _, _ := checkLineAction(c, childProgram.ProductionLineID, lineActionManage)
+			if !allowed {
+				return errors.New("forbidden_child_program")
 			}
 
 			var existingMapping models.ProgramMapping
 			if err := tx.Where("child_program_id = ?", childID).First(&existingMapping).Error; err == nil {
-				return errors.New("所选程序已被映射")
+				return errors.New("????????")
 			}
 
 			var versionCount int64
@@ -233,7 +261,7 @@ func CreateProgramMappings(c *gin.Context) {
 				return err
 			}
 			if versionCount > 0 || fileCount > 0 {
-				return errors.New("被映射程序下必须没有任何版本")
+				return errors.New("??????????????")
 			}
 
 			mapping := models.ProgramMapping{
@@ -248,6 +276,10 @@ func CreateProgramMappings(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
+		if err.Error() == "forbidden_child_program" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "?????????????"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -258,28 +290,31 @@ func CreateProgramMappings(c *gin.Context) {
 func DeleteProgramMapping(c *gin.Context) {
 	mappingID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "映射ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
 	var mapping models.ProgramMapping
 	if err := database.DB.First(&mapping, mappingID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "映射不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询映射失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 	if !authorizeProgramAction(c, database.DB, mapping.ParentProgramID, lineActionManage) {
 		return
 	}
-
-	result := database.DB.Delete(&models.ProgramMapping{}, mappingID)
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "取消映射失败"})
+	if !authorizeProgramAction(c, database.DB, mapping.ChildProgramID, lineActionManage) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "取消映射成功"})
+	result := database.DB.Delete(&models.ProgramMapping{}, mappingID)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "??????"})
 }

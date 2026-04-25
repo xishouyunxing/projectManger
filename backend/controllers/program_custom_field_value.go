@@ -19,6 +19,66 @@ type programCustomFieldValueInput struct {
 	Value   string `json:"value"`
 }
 
+func replaceProgramCustomFieldValues(tx *gorm.DB, program models.Program, inputs []programCustomFieldValueInput) ([]models.ProgramCustomFieldValue, error) {
+	newValues := make([]models.ProgramCustomFieldValue, 0, len(inputs))
+	seenFieldIDs := make(map[uint]struct{}, len(inputs))
+	for _, input := range inputs {
+		if input.FieldID == 0 {
+			return nil, errProgramCustomFieldFieldIDRequired
+		}
+		if _, exists := seenFieldIDs[input.FieldID]; exists {
+			return nil, errProgramCustomFieldDuplicateFieldID
+		}
+		seenFieldIDs[input.FieldID] = struct{}{}
+
+		var field models.ProductionLineCustomField
+		if err := tx.Where("id = ? AND production_line_id = ?", input.FieldID, program.ProductionLineID).First(&field).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errProgramCustomFieldNotBelongToProductionLine
+			}
+			return nil, err
+		}
+		if !field.Enabled {
+			return nil, errProgramCustomFieldDisabled
+		}
+
+		value := input.Value
+		if field.FieldType == "select" {
+			options, err := validateSelectFieldOptions(field.OptionsJSON)
+			if err != nil {
+				return nil, err
+			}
+			matched := false
+			for _, option := range options {
+				if value == option {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, errProgramCustomFieldInvalidSelectValue
+			}
+		}
+
+		newValues = append(newValues, models.ProgramCustomFieldValue{
+			ProgramID:                   program.ID,
+			ProductionLineCustomFieldID: field.ID,
+			Value:                       value,
+		})
+	}
+
+	if err := tx.Where("program_id = ?", program.ID).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
+		return nil, err
+	}
+	if len(newValues) > 0 {
+		if err := tx.Create(&newValues).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	return newValues, nil
+}
+
 func SaveProgramCustomFieldValues(c *gin.Context) {
 	programID, err := parseUintParam(c.Param("id"))
 	if err != nil {
@@ -51,64 +111,8 @@ func SaveProgramCustomFieldValues(c *gin.Context) {
 			return errors.New("forbidden")
 		}
 
-		newValues := make([]models.ProgramCustomFieldValue, 0, len(req.Values))
-		seenFieldIDs := make(map[uint]struct{}, len(req.Values))
-		for _, input := range req.Values {
-			if input.FieldID == 0 {
-				return errProgramCustomFieldFieldIDRequired
-			}
-			if _, exists := seenFieldIDs[input.FieldID]; exists {
-				return errProgramCustomFieldDuplicateFieldID
-			}
-			seenFieldIDs[input.FieldID] = struct{}{}
-
-			var field models.ProductionLineCustomField
-			if err := tx.Where("id = ? AND production_line_id = ?", input.FieldID, program.ProductionLineID).First(&field).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return errProgramCustomFieldNotBelongToProductionLine
-				}
-				return err
-			}
-			if !field.Enabled {
-				return errProgramCustomFieldDisabled
-			}
-
-			value := input.Value
-			if field.FieldType == "select" {
-				options, err := validateSelectFieldOptions(field.OptionsJSON)
-				if err != nil {
-					return err
-				}
-				matched := false
-				for _, option := range options {
-					if value == option {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					return errProgramCustomFieldInvalidSelectValue
-				}
-			}
-
-			newValues = append(newValues, models.ProgramCustomFieldValue{
-				ProgramID:                   program.ID,
-				ProductionLineCustomFieldID: field.ID,
-				Value:                       value,
-			})
-		}
-
-		if err := tx.Where("program_id = ?", program.ID).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
-			return err
-		}
-		if len(newValues) > 0 {
-			if err := tx.Create(&newValues).Error; err != nil {
-				return err
-			}
-		}
-
-		savedValues = newValues
-		return nil
+		savedValues, err = replaceProgramCustomFieldValues(tx, program, req.Values)
+		return err
 	})
 	if txErr != nil {
 		switch {

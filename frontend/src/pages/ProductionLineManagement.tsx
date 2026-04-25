@@ -56,8 +56,11 @@ const ProductionLineManagement = () => {
         params: {
           page,
           page_size: pageSize,
+          ...(searchKeyword ? { keyword: searchKeyword } : {}),
           ...(filterType ? { type: filterType } : {}),
           ...(filterStatus ? { status: filterStatus } : {}),
+          ...(filterDateRange[0] ? { date_from: filterDateRange[0] } : {}),
+          ...(filterDateRange[1] ? { date_to: filterDateRange[1] } : {}),
         },
       });
       const linesPaged = extractPagedListData(linesRes.data);
@@ -128,47 +131,14 @@ const ProductionLineManagement = () => {
     setFilterType(null);
     setFilterStatus(null);
     setFilterDateRange([null, null]);
-    loadData(1, tablePagination.pageSize);
   };
 
   useEffect(() => {
     loadData(1, tablePagination.pageSize);
-  }, [filterType, filterStatus]);
+  }, [searchKeyword, filterType, filterStatus, filterDateRange]);
 
   // 筛选后的生产线列表
-  const filteredProductionLines = productionLines.filter((line: any) => {
-    // 关键词搜索（模糊匹配名称、编号、描述）
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      const nameMatch = line.name?.toLowerCase().includes(keyword);
-      const codeMatch = line.code?.toLowerCase().includes(keyword);
-      const descMatch = line.description?.toLowerCase().includes(keyword);
-      if (!nameMatch && !codeMatch && !descMatch) {
-        return false;
-      }
-    }
-    if (filterType && line.type !== filterType) {
-      return false;
-    }
-    if (filterStatus && line.status !== filterStatus) {
-      return false;
-    }
-    // 时间筛选
-    if (filterDateRange[0] || filterDateRange[1]) {
-      const lineDate = new Date(line.created_at);
-      if (filterDateRange[0]) {
-        const startDate = new Date(filterDateRange[0]);
-        startDate.setHours(0, 0, 0, 0);
-        if (lineDate < startDate) return false;
-      }
-      if (filterDateRange[1]) {
-        const endDate = new Date(filterDateRange[1]);
-        endDate.setHours(23, 59, 59, 999);
-        if (lineDate > endDate) return false;
-      }
-    }
-    return true;
-  }).sort((a: any, b: any) => {
+  const sortedProductionLines = [...productionLines].sort((a: any, b: any) => {
     if (selectedLineId) {
       if (a.id === selectedLineId) return -1;
       if (b.id === selectedLineId) return 1;
@@ -417,7 +387,7 @@ const ProductionLineManagement = () => {
       <div className="management-table-card">
         <Table
           columns={columns}
-          dataSource={filteredProductionLines}
+          dataSource={sortedProductionLines}
           rowKey="id"
           loading={loading}
           pagination={{

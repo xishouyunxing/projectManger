@@ -17,6 +17,8 @@ interface UseProgramManagementDataOptions {
   filterProductionLine: number | null;
   filterVehicleModel: number | null;
   filterStatus: string | null;
+  filterDateRange: [string | null, string | null];
+  customFieldFilterValues: Record<string, string>;
   selectedProgramId: number;
   userId?: number;
 }
@@ -28,6 +30,8 @@ export const useProgramManagementData = ({
   filterProductionLine,
   filterVehicleModel,
   filterStatus,
+  filterDateRange,
+  customFieldFilterValues,
   selectedProgramId,
   userId,
 }: UseProgramManagementDataOptions) => {
@@ -42,11 +46,20 @@ export const useProgramManagementData = ({
   const [versionsPage, setVersionsPage] = useState(1);
   const [versionsPageSize, setVersionsPageSize] = useState(20);
   const [versionsTotal, setVersionsTotal] = useState(0);
-  const [customFields, setCustomFields] = useState<ProgramCustomFieldDefinition[]>([]);
+  const [customFields, setCustomFields] = useState<
+    ProgramCustomFieldDefinition[]
+  >([]);
 
   const loadData = async () => {
     setTableLoading(true);
     try {
+      const customFieldParams = Object.fromEntries(
+        Object.entries(customFieldFilterValues)
+          .map(([fieldId, value]) => [fieldId, value.trim()] as const)
+          .filter(([, value]) => Boolean(value))
+          .map(([fieldId, value]) => [`custom_field_${fieldId}`, value]),
+      );
+
       const [programsRes, linesRes, modelsRes] = await Promise.all([
         api.get('/programs', {
           params: {
@@ -56,10 +69,17 @@ export const useProgramManagementData = ({
             production_line_id: filterProductionLine || undefined,
             vehicle_model_id: filterVehicleModel || undefined,
             status: filterStatus || undefined,
+            date_from: filterDateRange[0] || undefined,
+            date_to: filterDateRange[1] || undefined,
+            ...customFieldParams,
           },
         }),
         api.get('/production-lines'),
-        api.get('/vehicle-models'),
+        api.get('/vehicle-models', {
+          params: {
+            scope: 'selector',
+          },
+        }),
       ]);
       setPrograms(programsRes.data?.items || programsRes.data || []);
       setProgramTotal(Number(programsRes.data?.total) || 0);
@@ -73,7 +93,11 @@ export const useProgramManagementData = ({
     }
   };
 
-  const loadVersions = async (programId: number, page = 1, pageSize = versionsPageSize) => {
+  const loadVersions = async (
+    programId: number,
+    page = 1,
+    pageSize = versionsPageSize,
+  ) => {
     const response = await api.get(`/files/program/${programId}`, {
       params: {
         page,
@@ -84,19 +108,32 @@ export const useProgramManagementData = ({
     setVersions(nextVersions);
     setVersionsPage(Number(response.data?.page) || page);
     setVersionsPageSize(Number(response.data?.page_size) || pageSize);
-    setVersionsTotal(Number(response.data?.total_versions) || nextVersions.length);
+    setVersionsTotal(
+      Number(response.data?.total_versions) || nextVersions.length,
+    );
     return nextVersions;
   };
 
   const loadCustomFields = async (productionLineId: number) => {
-    const response = await api.get(`/production-lines/${productionLineId}/custom-fields`);
+    const response = await api.get(
+      `/production-lines/${productionLineId}/custom-fields`,
+    );
     return buildEnabledCustomFields(response.data);
   };
 
   useEffect(() => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [programPage, programPageSize, searchKeyword, filterProductionLine, filterVehicleModel, filterStatus]);
+  }, [
+    programPage,
+    programPageSize,
+    searchKeyword,
+    filterProductionLine,
+    filterVehicleModel,
+    filterStatus,
+    filterDateRange,
+    customFieldFilterValues,
+  ]);
 
   const filteredPrograms = programs
     .filter((a) => Boolean(a))
@@ -106,8 +143,10 @@ export const useProgramManagementData = ({
         if (b.id === selectedProgramId) return 1;
       }
 
-      const aEditingByMe = a.status === 'in_progress' && a.editing_by === userId;
-      const bEditingByMe = b.status === 'in_progress' && b.editing_by === userId;
+      const aEditingByMe =
+        a.status === 'in_progress' && a.editing_by === userId;
+      const bEditingByMe =
+        b.status === 'in_progress' && b.editing_by === userId;
       if (aEditingByMe && !bEditingByMe) return -1;
       if (!aEditingByMe && bEditingByMe) return 1;
 

@@ -50,6 +50,18 @@ func setupChangePasswordTestRouter() *gin.Engine {
 	return r
 }
 
+func setupUpdateUserTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	api := r.Group("/api")
+	api.Use(middleware.AuthMiddleware())
+	{
+		users := api.Group("/users")
+		users.PUT("/:id", UpdateUser)
+	}
+	return r
+}
+
 func performChangePasswordRequest(t *testing.T, r http.Handler, token string, targetUserID uint, payload any) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -60,6 +72,24 @@ func performChangePasswordRequest(t *testing.T, r http.Handler, token string, ta
 
 	path := fmt.Sprintf("/api/users/%d/change-password", targetUserID)
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	return resp
+}
+
+func performUpdateUserRequest(t *testing.T, r http.Handler, token string, targetUserID uint, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal request payload: %v", err)
+	}
+
+	path := fmt.Sprintf("/api/users/%d", targetUserID)
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -171,4 +201,80 @@ func TestAuthMiddlewareRejectsTokenRoleMismatch(t *testing.T) {
 		t.Fatalf("expected 401, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	assertPasswordMatches(t, target.ID, "target-old")
+}
+
+func TestUpdateUserDoesNotAllowSelfServiceDepartmentEscalation(t *testing.T) {
+	database.DB = openProductionLineCustomFieldTestDB(t)
+	r := setupUpdateUserTestRouter()
+
+	deptA := models.Department{Name: "Dept-A", Status: "active"}
+	deptB := models.Department{Name: "Dept-B", Status: "active"}
+	if err := database.DB.Create(&deptA).Error; err != nil {
+		t.Fatalf("create deptA: %v", err)
+	}
+	if err := database.DB.Create(&deptB).Error; err != nil {
+		t.Fatalf("create deptB: %v", err)
+	}
+
+	selfUser := models.User{
+		Name:         "Self",
+		EmployeeID:   "EMP-U1",
+		Role:         "user",
+		Password:     createHashedPasswordForTest(t, "self-old"),
+		Status:       "active",
+		DepartmentID: &deptA.ID,
+	}
+	adminUser := models.User{
+		Name:       "Admin",
+		EmployeeID: "EMP-U2",
+		Role:       "admin",
+		Password:   createHashedPasswordForTest(t, "admin-old"),
+		Status:     "active",
+	}
+	if err := database.DB.Create(&selfUser).Error; err != nil {
+		t.Fatalf("create self user: %v", err)
+	}
+	if err := database.DB.Create(&adminUser).Error; err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+
+	selfToken := createUserTokenForTest(t, selfUser.ID, "user")
+	adminToken := createUserTokenForTest(t, adminUser.ID, "admin")
+
+	resp := performUpdateUserRequest(t, r, selfToken, selfUser.ID, map[string]any{
+		"name":          "Self Updated",
+		"department_id": deptB.ID,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for self update, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var reloaded models.User
+	if err := database.DB.First(&reloaded, selfUser.ID).Error; err != nil {
+		t.Fatalf("reload self user: %v", err)
+	}
+	if reloaded.Name != "Self Updated" {
+		t.Fatalf("expected self-service name update to persist, got %q", reloaded.Name)
+	}
+	if reloaded.DepartmentID == nil || *reloaded.DepartmentID != deptA.ID {
+		t.Fatalf("expected self-service department to remain %d, got %#v", deptA.ID, reloaded.DepartmentID)
+	}
+
+	resp = performUpdateUserRequest(t, r, adminToken, selfUser.ID, map[string]any{
+		"department_id": deptB.ID,
+		"status":        "inactive",
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for admin update, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	if err := database.DB.First(&reloaded, selfUser.ID).Error; err != nil {
+		t.Fatalf("reload updated user: %v", err)
+	}
+	if reloaded.DepartmentID == nil || *reloaded.DepartmentID != deptB.ID {
+		t.Fatalf("expected admin to move department to %d, got %#v", deptB.ID, reloaded.DepartmentID)
+	}
+	if reloaded.Status != "inactive" {
+		t.Fatalf("expected admin status update to persist, got %q", reloaded.Status)
+	}
 }

@@ -52,13 +52,11 @@ import ProgramHeader from './program-management/ProgramHeader';
 import ProgramFilterPanel from './program-management/ProgramFilterPanel';
 import { useProgramManagementData } from './program-management/useProgramManagementData';
 import {
-  buildBaseProgramPayload,
-  buildCustomFieldValuesPayload,
+  buildProgramMutationPayload,
   buildPropertyDraftSnapshot,
   formatFileSize,
   getFileTypeLabel,
   getProgramCustomFieldSummaries,
-  getProgramCustomFieldValue,
   getVersionSelectionKey,
   normalizeCustomFieldValues,
   parseCustomFieldOptions,
@@ -87,28 +85,41 @@ const ProgramManagement = () => {
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [currentProgram, setCurrentProgram] = useState<Program | null>(null);
-  const [selectedVersionKey, setSelectedVersionKey] = useState<string | null>(null);
+  const [selectedVersionKey, setSelectedVersionKey] = useState<string | null>(
+    null,
+  );
   const [isEditingProperties, setIsEditingProperties] = useState(false);
-  const [propertyDraftSnapshot, setPropertyDraftSnapshot] = useState<ProgramFormValues | null>(null);
+  const [propertyDraftSnapshot, setPropertyDraftSnapshot] =
+    useState<ProgramFormValues | null>(null);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
-  const [descriptionDraftSnapshot, setDescriptionDraftSnapshot] = useState<string>('');
+  const [descriptionDraftSnapshot, setDescriptionDraftSnapshot] =
+    useState<string>('');
   const [versionDescriptionValue, setVersionDescriptionValue] = useState('');
   const [form] = Form.useForm();
   const [uploadForm] = Form.useForm();
 
   // 筛选相关状态
-  const [filterProductionLine, setFilterProductionLine] = useState<number | null>(null);
-  const [filterVehicleModel, setFilterVehicleModel] = useState<number | null>(null);
+  const [filterProductionLine, setFilterProductionLine] = useState<
+    number | null
+  >(null);
+  const [filterVehicleModel, setFilterVehicleModel] = useState<number | null>(
+    null,
+  );
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [filterDateRange, setFilterDateRange] = useState<[string | null, string | null]>([null, null]);
-  const [customFieldFilters, setCustomFieldFilters] = useState<ProgramCustomFieldDefinition[]>([]);
-  const [customFieldFilterValues, setCustomFieldFilterValues] = useState<Record<string, string>>({});
+  const [filterDateRange, setFilterDateRange] = useState<
+    [string | null, string | null]
+  >([null, null]);
+  const [customFieldFilters, setCustomFieldFilters] = useState<
+    ProgramCustomFieldDefinition[]
+  >([]);
+  const [customFieldFilterValues, setCustomFieldFilterValues] = useState<
+    Record<string, string>
+  >({});
   const [programPage, setProgramPage] = useState(1);
   const [programPageSize, setProgramPageSize] = useState(20);
 
   const {
-    programs,
     productionLines,
     vehicleModels,
     tableLoading,
@@ -135,6 +146,8 @@ const ProgramManagement = () => {
     filterProductionLine,
     filterVehicleModel,
     filterStatus,
+    filterDateRange,
+    customFieldFilterValues,
     selectedProgramId,
     userId: user?.id,
   });
@@ -145,45 +158,19 @@ const ProgramManagement = () => {
   const [addRelationModalVisible, setAddRelationModalVisible] = useState(false);
   const [relationForm] = Form.useForm();
   const [mappingSearchKeyword, setMappingSearchKeyword] = useState('');
-  const [mappingFilterProductionLine, setMappingFilterProductionLine] = useState<number | null>(null);
-  const [mappingFilterVehicleModel, setMappingFilterVehicleModel] = useState<number | null>(null);
-  const [mappingFilterStatus, setMappingFilterStatus] = useState<string | null>(null);
+  const [mappingFilterProductionLine, setMappingFilterProductionLine] =
+    useState<number | null>(null);
+  const [mappingFilterVehicleModel, setMappingFilterVehicleModel] = useState<
+    number | null
+  >(null);
+  const [mappingFilterStatus, setMappingFilterStatus] = useState<string | null>(
+    null,
+  );
+  const [mappingCandidatePrograms, setMappingCandidatePrograms] = useState<
+    Program[]
+  >([]);
 
-  const filteredPrograms = sortedPrograms.filter((program) => {
-    for (const field of customFieldFilters) {
-      const filterValue = customFieldFilterValues[String(field.id)]?.trim();
-      if (!filterValue) {
-        continue;
-      }
-
-      const programValue = getProgramCustomFieldValue(program, field.id);
-      if (field.field_type === 'select') {
-        if (programValue !== filterValue) {
-          return false;
-        }
-        continue;
-      }
-
-      if (!programValue.toLowerCase().includes(filterValue.toLowerCase())) {
-        return false;
-      }
-    }
-
-    if (filterDateRange[0] || filterDateRange[1]) {
-      const programDate = new Date(program.created_at);
-      if (filterDateRange[0]) {
-        const startDate = new Date(filterDateRange[0]);
-        startDate.setHours(0, 0, 0, 0);
-        if (programDate < startDate) return false;
-      }
-      if (filterDateRange[1]) {
-        const endDate = new Date(filterDateRange[1]);
-        endDate.setHours(23, 59, 59, 999);
-        if (programDate > endDate) return false;
-      }
-    }
-    return true;
-  });
+  const filteredPrograms = sortedPrograms;
 
   // 重置筛选
   const handleResetFilter = () => {
@@ -197,30 +184,10 @@ const ProgramManagement = () => {
     setCustomFieldFilterValues({});
   };
 
-  const mappingCandidatePrograms = programs
+  const availableMappingCandidatePrograms = mappingCandidatePrograms
     .filter((p) => p.id !== currentProgram?.id)
     .filter((p) => !p.mapping_info)
-    .filter((p) => !relatedPrograms.some((rp) => rp.child_program.id === p.id))
-    .filter((p) => {
-      if (mappingSearchKeyword) {
-        const keyword = mappingSearchKeyword.toLowerCase();
-        const nameMatch = p.name?.toLowerCase().includes(keyword);
-        const codeMatch = p.code?.toLowerCase().includes(keyword);
-        if (!nameMatch && !codeMatch) {
-          return false;
-        }
-      }
-      if (mappingFilterProductionLine && p.production_line_id !== mappingFilterProductionLine) {
-        return false;
-      }
-      if (mappingFilterVehicleModel && p.vehicle_model_id !== mappingFilterVehicleModel) {
-        return false;
-      }
-      if (mappingFilterStatus && p.status !== mappingFilterStatus) {
-        return false;
-      }
-      return true;
-    });
+    .filter((p) => !relatedPrograms.some((rp) => rp.child_program.id === p.id));
 
   const handleFilterProductionLineChange = async (value?: number) => {
     const nextValue = value ?? null;
@@ -242,6 +209,7 @@ const ProgramManagement = () => {
   };
 
   const handleCustomFieldFilterChange = (fieldId: string, value: string) => {
+    setProgramPage(1);
     setCustomFieldFilterValues((current) => {
       if (!value) {
         const nextValues = { ...current };
@@ -255,6 +223,52 @@ const ProgramManagement = () => {
       };
     });
   };
+
+  useEffect(() => {
+    if (!addRelationModalVisible || !currentProgram) {
+      setMappingCandidatePrograms([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadMappingCandidates = async () => {
+      try {
+        const response = await api.get('/programs', {
+          params: {
+            keyword: mappingSearchKeyword || undefined,
+            production_line_id: mappingFilterProductionLine || undefined,
+            vehicle_model_id: mappingFilterVehicleModel || undefined,
+            status: mappingFilterStatus || undefined,
+          },
+        });
+        if (cancelled) {
+          return;
+        }
+
+        setMappingCandidatePrograms(
+          response.data?.items || response.data || [],
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load mapping candidates:', error);
+          setMappingCandidatePrograms([]);
+        }
+      }
+    };
+
+    void loadMappingCandidates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    addRelationModalVisible,
+    currentProgram,
+    mappingSearchKeyword,
+    mappingFilterProductionLine,
+    mappingFilterVehicleModel,
+    mappingFilterStatus,
+  ]);
 
   const handleModalProductionLineChange = async (
     productionLineId: number,
@@ -286,7 +300,8 @@ const ProgramManagement = () => {
   const handleExportExcel = async () => {
     try {
       const params: any = {};
-      if (filterProductionLine) params.production_line_id = filterProductionLine;
+      if (filterProductionLine)
+        params.production_line_id = filterProductionLine;
       if (filterVehicleModel) params.vehicle_model_id = filterVehicleModel;
       if (filterStatus) params.status = filterStatus;
 
@@ -325,7 +340,9 @@ const ProgramManagement = () => {
     setCurrentProgram(record);
     setModalLoading(true);
     try {
-      const response = await api.get(`/program-mappings/by-parent/${record.id}`);
+      const response = await api.get(
+        `/program-mappings/by-parent/${record.id}`,
+      );
       setRelatedPrograms(response.data || []);
       setRelationDrawerVisible(true);
     } catch (error) {
@@ -339,9 +356,12 @@ const ProgramManagement = () => {
 
   const handleAddRelation = async (values: any) => {
     try {
-      await api.post(`/program-mappings?parent_program_id=${currentProgram?.id}`, {
-        child_program_ids: values.child_program_ids,
-      });
+      await api.post(
+        `/program-mappings?parent_program_id=${currentProgram?.id}`,
+        {
+          child_program_ids: values.child_program_ids,
+        },
+      );
       message.success('映射成功');
       setAddRelationModalVisible(false);
       relationForm.resetFields();
@@ -350,7 +370,9 @@ const ProgramManagement = () => {
       setMappingFilterVehicleModel(null);
       setMappingFilterStatus(null);
       if (currentProgram) {
-        const response = await api.get(`/program-mappings/by-parent/${currentProgram.id}`);
+        const response = await api.get(
+          `/program-mappings/by-parent/${currentProgram.id}`,
+        );
         setRelatedPrograms(response.data || []);
       }
       await loadData();
@@ -365,7 +387,9 @@ const ProgramManagement = () => {
       await api.delete(`/program-mappings/${mappingId}`);
       message.success('取消映射成功');
       if (currentProgram) {
-        const response = await api.get(`/program-mappings/by-parent/${currentProgram.id}`);
+        const response = await api.get(
+          `/program-mappings/by-parent/${currentProgram.id}`,
+        );
         setRelatedPrograms(response.data || []);
       }
       await loadData();
@@ -375,15 +399,22 @@ const ProgramManagement = () => {
     }
   };
 
-  const [versionChangeLogSupported, setVersionChangeLogSupported] = useState(true);
+  const [versionChangeLogSupported, setVersionChangeLogSupported] =
+    useState(true);
   const [batchImportSupported, setBatchImportSupported] = useState(true);
 
   const [batchImportVisible, setBatchImportVisible] = useState(false);
   const [batchImportStep, setBatchImportStep] = useState(0);
-  const [batchImportPreview, setBatchImportPreview] = useState<BatchImportPreview | null>(null);
-  const [workstationMappings, setWorkstationMappings] = useState<WorkstationMapping[]>([]);
-  const [batchImportStatus, setBatchImportStatus] = useState<BatchImportStatus | null>(null);
-  const [batchImportPolling, setBatchImportPolling] = useState<ReturnType<typeof setInterval> | null>(null);
+  const [batchImportPreview, setBatchImportPreview] =
+    useState<BatchImportPreview | null>(null);
+  const [workstationMappings, setWorkstationMappings] = useState<
+    WorkstationMapping[]
+  >([]);
+  const [batchImportStatus, setBatchImportStatus] =
+    useState<BatchImportStatus | null>(null);
+  const [batchImportPolling, setBatchImportPolling] = useState<ReturnType<
+    typeof setInterval
+  > | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
 
   useEffect(() => {
@@ -396,7 +427,10 @@ const ProgramManagement = () => {
       return;
     }
 
-    if (selectedVersionKey && versions.some((v) => getVersionSelectionKey(v) === selectedVersionKey)) {
+    if (
+      selectedVersionKey &&
+      versions.some((v) => getVersionSelectionKey(v) === selectedVersionKey)
+    ) {
       return;
     }
 
@@ -416,7 +450,10 @@ const ProgramManagement = () => {
       return;
     }
 
-    form.setFieldValue('custom_field_values', normalizeCustomFieldValues(currentProgram.custom_field_values));
+    form.setFieldValue(
+      'custom_field_values',
+      normalizeCustomFieldValues(currentProgram.custom_field_values),
+    );
   }, [currentProgram, form, modalVisible, customFields]);
 
   const handleAdd = () => {
@@ -445,7 +482,9 @@ const ProgramManagement = () => {
     setDescriptionDraftSnapshot('');
     form.setFieldsValue({
       ...record,
-      custom_field_values: normalizeCustomFieldValues(record.custom_field_values),
+      custom_field_values: normalizeCustomFieldValues(
+        record.custom_field_values,
+      ),
     });
     setModalVisible(true);
 
@@ -480,22 +519,22 @@ const ProgramManagement = () => {
   };
 
   const handleSubmit = async (values: any) => {
-    const payload = buildBaseProgramPayload(values, currentProgram?.description || '');
-    const customFieldPayload = buildCustomFieldValuesPayload(values);
+    const payload = buildProgramMutationPayload(
+      values,
+      currentProgram?.description || '',
+    );
 
     try {
       if (currentProgram) {
         await api.put(`/programs/${currentProgram.id}`, payload);
-        await api.put(`/programs/${currentProgram.id}/custom-field-values`, customFieldPayload);
-        message.success('更新成功');
+        message.success('??????');
         setIsEditingProperties(false);
         setPropertyDraftSnapshot(null);
         setIsEditingDescription(false);
         setDescriptionDraftSnapshot('');
       } else {
-        const response = await api.post('/programs', payload);
-        await api.put(`/programs/${response.data.id}/custom-field-values`, customFieldPayload);
-        message.success('创建成功');
+        await api.post('/programs', payload);
+        message.success('??????');
       }
       setModalVisible(false);
       setCustomFields([]);
@@ -504,7 +543,7 @@ const ProgramManagement = () => {
       console.error('Failed to submit:', error);
       const serverMsg = error?.response?.data?.error;
       message.error(
-        serverMsg ? `操作失败: ${serverMsg}` : '操作失败，请稍后重试',
+        serverMsg ? `??????: ${serverMsg}` : '???????????????',
       );
     }
   };
@@ -585,7 +624,7 @@ const ProgramManagement = () => {
 
     try {
       const response = await api.post('/programs/batch-import', {
-        temp_dir: batchImportPreview?.temp_dir,
+        preview_id: batchImportPreview?.preview_id,
         mappings: workstationMappings,
       });
 
@@ -625,7 +664,10 @@ const ProgramManagement = () => {
         }
       } catch (error: any) {
         console.error('Failed to poll import status:', error);
-        if (error?.response?.status === 404 || error?.response?.status === 405) {
+        if (
+          error?.response?.status === 404 ||
+          error?.response?.status === 405
+        ) {
           clearInterval(interval);
           setBatchImportPolling(null);
           setBatchImportSupported(false);
@@ -654,7 +696,6 @@ const ProgramManagement = () => {
     uploadForm.setFieldValue('program_id', record.id);
     setUploadModalVisible(true);
   };
-
 
   const handleUploadSubmit = async (values: any) => {
     console.log('上传数据:', values);
@@ -694,7 +735,7 @@ const ProgramManagement = () => {
 
       setUploadModalVisible(false);
       loadData();
-      
+
       if (currentProgram && (fileModalVisible || modalVisible)) {
         try {
           await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
@@ -766,7 +807,8 @@ const ProgramManagement = () => {
       }
 
       // 获取最新版本的所有文件
-      const latestVersion = versions[0];
+      const latestVersion =
+        versions.find((version: any) => version.is_current) || versions[0];
       const files = latestVersion?.files || [];
       if (files.length > 0) {
         if (files.length === 1) {
@@ -813,18 +855,39 @@ const ProgramManagement = () => {
 
         return (
           <Space size={[8, 8]} wrap>
-            <span style={{ color: '#2D3335', fontSize: '15px', fontWeight: 800, fontFamily: 'Inter, sans-serif', letterSpacing: '-0.01em' }}>
+            <span
+              style={{
+                color: '#2D3335',
+                fontSize: '15px',
+                fontWeight: 800,
+                fontFamily: 'Inter, sans-serif',
+                letterSpacing: '-0.01em',
+              }}
+            >
               {text}
             </span>
             {record.mapping_info && (
               <Tag
-                style={{ marginInlineEnd: 0, padding: '0 6px', fontSize: '10px', lineHeight: '18px', height: '20px', borderRadius: '9999px', color: '#005BC1', borderColor: 'rgba(0, 91, 193, 0.2)', background: 'rgba(0, 91, 193, 0.08)' }}
+                style={{
+                  marginInlineEnd: 0,
+                  padding: '0 6px',
+                  fontSize: '10px',
+                  lineHeight: '18px',
+                  height: '20px',
+                  borderRadius: '9999px',
+                  color: '#005BC1',
+                  borderColor: 'rgba(0, 91, 193, 0.2)',
+                  background: 'rgba(0, 91, 193, 0.08)',
+                }}
               >
                 与 {record.mapping_info.parent_program_name} 关联
               </Tag>
             )}
             {fieldSummaries.map((field) => (
-              <Tooltip key={field.field_id} title={`${field.field_name}: ${field.value}`}>
+              <Tooltip
+                key={field.field_id}
+                title={`${field.field_name}: ${field.value}`}
+              >
                 <Tag
                   style={{
                     marginInlineEnd: 0,
@@ -851,7 +914,14 @@ const ProgramManagement = () => {
       dataIndex: 'code',
       key: 'code',
       render: (text: string) => (
-        <span style={{ color: '#5A6062', fontSize: '14px', fontWeight: 500, fontFamily: 'Inter, sans-serif' }}>
+        <span
+          style={{
+            color: '#5A6062',
+            fontSize: '14px',
+            fontWeight: 500,
+            fontFamily: 'Inter, sans-serif',
+          }}
+        >
           {text}
         </span>
       ),
@@ -880,23 +950,51 @@ const ProgramManagement = () => {
       render: (status: string, record: Program) => {
         const isCompleted = status === 'completed';
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-start' }}>
-            <div style={{ 
-              background: isCompleted ? 'rgba(61, 137, 255, 0.20)' : 'rgba(222, 204, 253, 0.40)', 
-              borderRadius: '9999px', 
-              display: 'inline-flex', 
-              alignItems: 'center',
-              padding: '2px 10px',
-              gap: '6px'
-            }}>
-              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: isCompleted ? '#005BC1' : '#50426B' }}></div>
-              <span style={{ color: isCompleted ? '#005BC1' : '#50426B', fontSize: '11px', fontWeight: 700 }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              alignItems: 'flex-start',
+            }}
+          >
+            <div
+              style={{
+                background: isCompleted
+                  ? 'rgba(61, 137, 255, 0.20)'
+                  : 'rgba(222, 204, 253, 0.40)',
+                borderRadius: '9999px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '2px 10px',
+                gap: '6px',
+              }}
+            >
+              <div
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  background: isCompleted ? '#005BC1' : '#50426B',
+                }}
+              ></div>
+              <span
+                style={{
+                  color: isCompleted ? '#005BC1' : '#50426B',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                }}
+              >
                 {isCompleted ? '已完成' : '进行中'}
               </span>
             </div>
             {!isCompleted && record.editing_user?.name && (
-              <span style={{ color: '#5A6062', fontSize: '11px', fontWeight: 500 }}>
-                {record.editing_by === user?.id ? '我正在编辑' : `${record.editing_user.name} 正在编辑`}
+              <span
+                style={{ color: '#5A6062', fontSize: '11px', fontWeight: 500 }}
+              >
+                {record.editing_by === user?.id
+                  ? '我正在编辑'
+                  : `${record.editing_user.name} 正在编辑`}
               </span>
             )}
           </div>
@@ -915,7 +1013,12 @@ const ProgramManagement = () => {
               type="text"
               icon={<EyeOutlined style={{ color: '#5A6062' }} />}
               onClick={() => handleViewFiles(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '4px',
+                background: '#F8F9FA',
+              }}
             />
           </Tooltip>
           <Tooltip title="上传文件">
@@ -923,7 +1026,12 @@ const ProgramManagement = () => {
               type="text"
               icon={<UploadOutlined style={{ color: '#5A6062' }} />}
               onClick={() => handleUpload(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '4px',
+                background: '#F8F9FA',
+              }}
             />
           </Tooltip>
           {/* 小铅笔: 打开编辑程序弹窗，这是编辑页入口 */}
@@ -932,7 +1040,12 @@ const ProgramManagement = () => {
               type="text"
               icon={<EditOutlined style={{ color: '#5A6062' }} />}
               onClick={() => handleEdit(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '4px',
+                background: '#F8F9FA',
+              }}
             />
           </Tooltip>
           <Dropdown
@@ -967,7 +1080,12 @@ const ProgramManagement = () => {
               <Button
                 type="text"
                 icon={<SettingOutlined style={{ color: '#5A6062' }} />}
-                style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '4px',
+                  background: '#F8F9FA',
+                }}
               />
             </Tooltip>
           </Dropdown>
@@ -977,33 +1095,49 @@ const ProgramManagement = () => {
   ];
 
   const fileModalVersions = [...versions].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 
   const fileModalSelectedVersion =
-    fileModalVersions.find((version) => getVersionSelectionKey(version) === selectedVersionKey) ??
+    fileModalVersions.find(
+      (version) => getVersionSelectionKey(version) === selectedVersionKey,
+    ) ??
     fileModalVersions.find((version) => version.is_current) ??
     fileModalVersions[0] ??
     null;
 
   const fileModalVersionFiles = fileModalSelectedVersion?.files || [];
-  const fileModalStatusLabel = fileModalSelectedVersion?.is_current ? '已部署' : '历史版本';
+  const fileModalStatusLabel = fileModalSelectedVersion?.is_current
+    ? '已部署'
+    : '历史版本';
   const fileModalCustomFieldPills = currentProgram
-    ? getProgramCustomFieldSummaries(currentProgram).map((field) => `${field.field_name}: ${field.value}`)
+    ? getProgramCustomFieldSummaries(currentProgram).map(
+        (field) => `${field.field_name}: ${field.value}`,
+      )
     : [];
   const fileModalAttributePills = [
-    currentProgram?.production_line?.name ? `产线: ${currentProgram.production_line.name}` : null,
-    currentProgram?.vehicle_model?.name ? `车型: ${currentProgram.vehicle_model.name}` : null,
-    currentProgram?.status ? `状态: ${currentProgram.status === 'completed' ? '已完成' : '进行中'}` : null,
+    currentProgram?.production_line?.name
+      ? `产线: ${currentProgram.production_line.name}`
+      : null,
+    currentProgram?.vehicle_model?.name
+      ? `车型: ${currentProgram.vehicle_model.name}`
+      : null,
+    currentProgram?.status
+      ? `状态: ${currentProgram.status === 'completed' ? '已完成' : '进行中'}`
+      : null,
     ...fileModalCustomFieldPills,
   ].filter((item): item is string => Boolean(item));
 
   const sortedEditorVersions = [...versions].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 
   const editorSelectedVersion =
-    sortedEditorVersions.find((version) => getVersionSelectionKey(version) === selectedVersionKey) ??
+    sortedEditorVersions.find(
+      (version) => getVersionSelectionKey(version) === selectedVersionKey,
+    ) ??
     sortedEditorVersions.find((version) => version.is_current) ??
     sortedEditorVersions[0] ??
     null;
@@ -1062,7 +1196,9 @@ const ProgramManagement = () => {
   };
 
   const handleStartPropertyEdit = () => {
-    setPropertyDraftSnapshot(buildPropertyDraftSnapshot(form.getFieldsValue(true)));
+    setPropertyDraftSnapshot(
+      buildPropertyDraftSnapshot(form.getFieldsValue(true)),
+    );
     setIsEditingProperties(true);
     setTimeout(() => {
       try {
@@ -1070,7 +1206,9 @@ const ProgramManagement = () => {
       } catch (error) {
         void error;
       }
-      const input = document.querySelector('input#name') as HTMLInputElement | null;
+      const input = document.querySelector(
+        'input#name',
+      ) as HTMLInputElement | null;
       input?.focus();
     }, 0);
   };
@@ -1096,7 +1234,9 @@ const ProgramManagement = () => {
     setDescriptionDraftSnapshot(versionDescriptionValue || '');
     setIsEditingDescription(true);
     setTimeout(() => {
-      const textArea = document.querySelector('textarea#version-description') as HTMLTextAreaElement | null;
+      const textArea = document.querySelector(
+        'textarea#version-description',
+      ) as HTMLTextAreaElement | null;
       textArea?.focus();
     }, 0);
   };
@@ -1168,7 +1308,10 @@ const ProgramManagement = () => {
           setProgramPage(1);
           setFilterStatus(value ?? null);
         }}
-        onDateRangeChange={setFilterDateRange}
+        onDateRangeChange={(range) => {
+          setProgramPage(1);
+          setFilterDateRange(range);
+        }}
         onReset={handleResetFilter}
         onCustomFieldFilterChange={handleCustomFieldFilterChange}
       />
@@ -1198,17 +1341,32 @@ const ProgramManagement = () => {
             total: programTotal,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100'],
-            showTotal: (total, range) => `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
-            style: { padding: '16px 24px', margin: 0, background: 'rgba(241, 244, 245, 0.50)' }
+            showTotal: (total, range) =>
+              `显示第 ${range[0]} 至 ${range[1]} 条，共 ${total} 条记录`,
+            style: {
+              padding: '16px 24px',
+              margin: 0,
+              background: 'rgba(241, 244, 245, 0.50)',
+            },
           }}
           locale={{
             emptyText: (
               <div style={{ padding: '40px 0' }}>
-                <FileOutlined style={{ fontSize: '48px', color: '#d9d9d9', marginBottom: '16px' }} />
+                <FileOutlined
+                  style={{
+                    fontSize: '48px',
+                    color: '#d9d9d9',
+                    marginBottom: '16px',
+                  }}
+                />
                 <div style={{ color: '#999', marginBottom: '16px' }}>
                   暂无程序数据
                 </div>
-                <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={handleAdd}
+                >
                   创建第一个程序
                 </Button>
               </div>
@@ -1241,9 +1399,13 @@ const ProgramManagement = () => {
         >
           <div className="program-editor-header">
             <div className="program-editor-header-title">
-              <AppstoreOutlined style={{ fontSize: '20px', color: '#2D3335' }} />
+              <AppstoreOutlined
+                style={{ fontSize: '20px', color: '#2D3335' }}
+              />
               <span>
-                {currentProgram?.name ? `${currentProgram.name} - 版本文件管理` : 'ssb2 - 版本文件管理'}
+                {currentProgram?.name
+                  ? `${currentProgram.name} - 版本文件管理`
+                  : 'ssb2 - 版本文件管理'}
               </span>
             </div>
             <div className="program-editor-header-actions">
@@ -1263,7 +1425,13 @@ const ProgramManagement = () => {
             </div>
           </div>
 
-          <Form form={form} layout="vertical" onFinish={handleSubmit} requiredMark={false} className="program-editor-form">
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={handleSubmit}
+            requiredMark={false}
+            className="program-editor-form"
+          >
             <div className="program-editor-property-strip">
               <div className="program-editor-property-strip-content">
                 <div className="program-editor-section-header">
@@ -1271,13 +1439,21 @@ const ProgramManagement = () => {
                   <div className="program-editor-section-actions">
                     {isEditingProperties ? (
                       <>
-                        <Button type="text" className="program-editor-header-button" onClick={handleCancelPropertyEdit}>
+                        <Button
+                          type="text"
+                          className="program-editor-header-button"
+                          onClick={handleCancelPropertyEdit}
+                        >
                           取消
                         </Button>
                         <Button
                           type="text"
                           className="program-editor-header-button"
-                          icon={<EditOutlined style={{ color: '#5A6062', fontSize: '14px' }} />}
+                          icon={
+                            <EditOutlined
+                              style={{ color: '#5A6062', fontSize: '14px' }}
+                            />
+                          }
                           onClick={() => void handleSavePropertyEdit()}
                         >
                           保存
@@ -1287,7 +1463,11 @@ const ProgramManagement = () => {
                       <Button
                         type="text"
                         className="program-editor-header-button"
-                        icon={<EditOutlined style={{ color: '#5A6062', fontSize: '14px' }} />}
+                        icon={
+                          <EditOutlined
+                            style={{ color: '#5A6062', fontSize: '14px' }}
+                          />
+                        }
                         onClick={handleStartPropertyEdit}
                       >
                         编辑
@@ -1299,22 +1479,52 @@ const ProgramManagement = () => {
                   <div className="program-editor-property-grid">
                     <div>
                       <div className="program-editor-field-label">程序名称</div>
-                      <Form.Item name="name" rules={[{ required: true, message: '请输入程序名称' }]} style={{ marginBottom: 0 }}>
-                        <Input disabled={!isEditingProperties} size="large" className="program-editor-input" placeholder="请输入程序名称" />
+                      <Form.Item
+                        name="name"
+                        rules={[{ required: true, message: '请输入程序名称' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Input
+                          disabled={!isEditingProperties}
+                          size="large"
+                          className="program-editor-input"
+                          placeholder="请输入程序名称"
+                        />
                       </Form.Item>
                     </div>
                     <div>
                       <div className="program-editor-field-label">程序编号</div>
-                      <Form.Item name="code" rules={[{ required: true, message: '请输入程序编号' }]} style={{ marginBottom: 0 }}>
-                        <Input disabled={!isEditingProperties} size="large" className="program-editor-input" placeholder="请输入程序编号" />
+                      <Form.Item
+                        name="code"
+                        rules={[{ required: true, message: '请输入程序编号' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Input
+                          disabled={!isEditingProperties}
+                          size="large"
+                          className="program-editor-input"
+                          placeholder="请输入程序编号"
+                        />
                       </Form.Item>
                     </div>
                     <div>
                       <div className="program-editor-field-label">状态</div>
-                      <Form.Item name="status" initialValue="in_progress" style={{ marginBottom: 0 }}>
-                        <Select disabled={!isEditingProperties} size="large" className="program-editor-input">
-                          <Select.Option value="in_progress">进行中</Select.Option>
-                          <Select.Option value="completed">已完成</Select.Option>
+                      <Form.Item
+                        name="status"
+                        initialValue="in_progress"
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Select
+                          disabled={!isEditingProperties}
+                          size="large"
+                          className="program-editor-input"
+                        >
+                          <Select.Option value="in_progress">
+                            进行中
+                          </Select.Option>
+                          <Select.Option value="completed">
+                            已完成
+                          </Select.Option>
                         </Select>
                       </Form.Item>
                     </div>
@@ -1323,8 +1533,20 @@ const ProgramManagement = () => {
                   <div className="program-editor-property-grid">
                     <div>
                       <div className="program-editor-field-label">产线</div>
-                      <Form.Item name="production_line_id" rules={[{ required: true, message: '请选择生产线' }]} style={{ marginBottom: 0 }}>
-                        <Select disabled={!isEditingProperties} size="large" className="program-editor-input" onChange={(value) => void handleModalProductionLineChange(value)} placeholder="请选择生产线">
+                      <Form.Item
+                        name="production_line_id"
+                        rules={[{ required: true, message: '请选择生产线' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Select
+                          disabled={!isEditingProperties}
+                          size="large"
+                          className="program-editor-input"
+                          onChange={(value) =>
+                            void handleModalProductionLineChange(value)
+                          }
+                          placeholder="请选择生产线"
+                        >
                           {productionLines.map((line: any) => (
                             <Select.Option key={line.id} value={line.id}>
                               {line.name}
@@ -1335,8 +1557,17 @@ const ProgramManagement = () => {
                     </div>
                     <div>
                       <div className="program-editor-field-label">车型</div>
-                      <Form.Item name="vehicle_model_id" style={{ marginBottom: 0 }}>
-                        <Select disabled={!isEditingProperties} size="large" className="program-editor-input" allowClear placeholder="请选择车型">
+                      <Form.Item
+                        name="vehicle_model_id"
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Select
+                          disabled={!isEditingProperties}
+                          size="large"
+                          className="program-editor-input"
+                          allowClear
+                          placeholder="请选择车型"
+                        >
                           {vehicleModels.map((model: any) => (
                             <Select.Option key={model.id} value={model.id}>
                               {model.name}
@@ -1346,14 +1577,27 @@ const ProgramManagement = () => {
                       </Form.Item>
                     </div>
                     {editorDynamicFields.map((field) => {
-                      const options = parseCustomFieldOptions(field.options_json);
+                      const options = parseCustomFieldOptions(
+                        field.options_json,
+                      );
 
                       return (
                         <div key={field.id}>
-                          <div className="program-editor-field-label">{field.name}</div>
-                          <Form.Item name={['custom_field_values', String(field.id)]} style={{ marginBottom: 0 }}>
+                          <div className="program-editor-field-label">
+                            {field.name}
+                          </div>
+                          <Form.Item
+                            name={['custom_field_values', String(field.id)]}
+                            style={{ marginBottom: 0 }}
+                          >
                             {field.field_type === 'select' ? (
-                              <Select disabled={!isEditingProperties} size="large" allowClear className="program-editor-input" placeholder={`请选择${field.name}`}>
+                              <Select
+                                disabled={!isEditingProperties}
+                                size="large"
+                                allowClear
+                                className="program-editor-input"
+                                placeholder={`请选择${field.name}`}
+                              >
                                 {options.map((option) => (
                                   <Select.Option key={option} value={option}>
                                     {option}
@@ -1361,7 +1605,12 @@ const ProgramManagement = () => {
                                 ))}
                               </Select>
                             ) : (
-                              <Input disabled={!isEditingProperties} size="large" className="program-editor-input" placeholder={`请输入${field.name}`} />
+                              <Input
+                                disabled={!isEditingProperties}
+                                size="large"
+                                className="program-editor-input"
+                                placeholder={`请输入${field.name}`}
+                              />
                             )}
                           </Form.Item>
                         </div>
@@ -1376,16 +1625,25 @@ const ProgramManagement = () => {
               <div className="program-editor-sidebar">
                 <div className="program-editor-sidebar-title">历史版本</div>
                 <div className="program-editor-sidebar-list">
-                  {(sortedEditorVersions.length > 0 ? sortedEditorVersions : [{
-                    id: -1,
-                    version: currentProgram?.version || '26.2.8',
-                    is_current: true,
-                    created_at: currentProgram?.created_at || new Date().toISOString(),
-                  }]).map((version, _index, versionList) => {
+                  {(sortedEditorVersions.length > 0
+                    ? sortedEditorVersions
+                    : [
+                        {
+                          id: -1,
+                          version: currentProgram?.version || '26.2.8',
+                          is_current: true,
+                          created_at:
+                            currentProgram?.created_at ||
+                            new Date().toISOString(),
+                        },
+                      ]
+                  ).map((version, _index, versionList) => {
                     const hasSingleVersion = versionList.length === 1;
                     const isFallbackVersion = version.id === -1;
                     const versionKey = getVersionSelectionKey(version);
-                    const selectedKey = getVersionSelectionKey(editorSelectedVersion);
+                    const selectedKey = getVersionSelectionKey(
+                      editorSelectedVersion,
+                    );
                     const isActive =
                       hasSingleVersion ||
                       isFallbackVersion ||
@@ -1393,19 +1651,28 @@ const ProgramManagement = () => {
                     return (
                       <div
                         key={version.id}
-                        onClick={() => setSelectedVersionKey(getVersionSelectionKey(version))}
+                        onClick={() =>
+                          setSelectedVersionKey(getVersionSelectionKey(version))
+                        }
                         className={`program-editor-version-button${isActive ? ' active' : ''}${version.id > 0 ? ' interactive' : ''}`}
                       >
                         <div className="program-editor-version-button-header">
-                          <span className="program-editor-version-name">{version.version}</span>
+                          <span className="program-editor-version-name">
+                            {version.version}
+                          </span>
                           {isActive && (
-                            <span className="program-editor-version-badge">当前</span>
+                            <span className="program-editor-version-badge">
+                              当前
+                            </span>
                           )}
                         </div>
                         <div className="program-editor-version-meta">
                           <span className="program-editor-version-label">
                             {version.id > 0
-                              ? new Date(version.created_at).toLocaleString('zh-CN', { hour12: false })
+                              ? new Date(version.created_at).toLocaleString(
+                                  'zh-CN',
+                                  { hour12: false },
+                                )
                               : '当前编辑版本'}
                           </span>
                         </div>
@@ -1440,19 +1707,30 @@ const ProgramManagement = () => {
                       <div className="program-editor-kicker">当前查看版本</div>
                       <div className="program-editor-version-summary">
                         <span className="program-editor-version-display">
-                          {editorSelectedVersion?.version || currentProgram?.version || '26.2.8'}
+                          {editorSelectedVersion?.version ||
+                            currentProgram?.version ||
+                            '26.2.8'}
                         </span>
                         <div className="program-editor-status-chip">
-                          {(editorSelectedVersion?.is_current ?? true) ? 'STABLE' : 'ARCHIVE'}
+                          {(editorSelectedVersion?.is_current ?? true)
+                            ? 'STABLE'
+                            : 'ARCHIVE'}
                         </div>
                       </div>
                     </div>
 
                     <div className="program-editor-hero-actions">
-                      <Button onClick={handleEditorRetransfer} className="program-editor-neutral-button">
+                      <Button
+                        onClick={handleEditorRetransfer}
+                        className="program-editor-neutral-button"
+                      >
                         重传此版本
                       </Button>
-                      <Button type="primary" onClick={() => void handleEditorDownloadAll()} className="program-editor-primary-button">
+                      <Button
+                        type="primary"
+                        onClick={() => void handleEditorDownloadAll()}
+                        className="program-editor-primary-button"
+                      >
                         全部下载
                       </Button>
                     </div>
@@ -1462,42 +1740,69 @@ const ProgramManagement = () => {
                     <div className="program-editor-meta-grid">
                       <div>
                         <div className="program-editor-meta-label">
-                          <UserOutlined style={{ color: '#5A6062', fontSize: '12px' }} />
+                          <UserOutlined
+                            style={{ color: '#5A6062', fontSize: '12px' }}
+                          />
                           <span>上传者</span>
                         </div>
                         <div className="program-editor-meta-content">
-                          {editorSelectedVersion?.uploader?.name || currentProgram?.editing_user?.name || user?.name || '系统管理员'}
+                          {editorSelectedVersion?.uploader?.name ||
+                            currentProgram?.editing_user?.name ||
+                            user?.name ||
+                            '系统管理员'}
                         </div>
                       </div>
                       <div>
                         <div className="program-editor-meta-label">
-                          <ClockCircleOutlined style={{ color: '#5A6062', fontSize: '12px' }} />
+                          <ClockCircleOutlined
+                            style={{ color: '#5A6062', fontSize: '12px' }}
+                          />
                           <span>创建时间</span>
                         </div>
                         <div className="program-editor-meta-content">
-                          {(editorSelectedVersion?.created_at || currentProgram?.created_at)
-                            ? new Date(editorSelectedVersion?.created_at || currentProgram?.created_at || '').toLocaleString('zh-CN', { hour12: false })
+                          {editorSelectedVersion?.created_at ||
+                          currentProgram?.created_at
+                            ? new Date(
+                                editorSelectedVersion?.created_at ||
+                                  currentProgram?.created_at ||
+                                  '',
+                              ).toLocaleString('zh-CN', { hour12: false })
                             : '创建后自动生成'}
                         </div>
                       </div>
                       <div>
                         <div className="program-editor-meta-label program-editor-meta-label-with-action">
                           <div className="program-editor-meta-label-main">
-                            <FileTextOutlined style={{ color: '#5A6062', fontSize: '12px' }} />
+                            <FileTextOutlined
+                              style={{ color: '#5A6062', fontSize: '12px' }}
+                            />
                             <span>版本说明</span>
                           </div>
                           <div className="program-editor-meta-label-actions">
                             {versionChangeLogSupported ? (
                               isEditingDescription ? (
                                 <>
-                                  <Button type="text" className="program-editor-header-button" onClick={handleCancelDescriptionEdit}>
+                                  <Button
+                                    type="text"
+                                    className="program-editor-header-button"
+                                    onClick={handleCancelDescriptionEdit}
+                                  >
                                     取消
                                   </Button>
                                   <Button
                                     type="text"
                                     className="program-editor-header-button"
-                                    icon={<EditOutlined style={{ color: '#5A6062', fontSize: '14px' }} />}
-                                    onClick={() => void handleSaveDescriptionEdit()}
+                                    icon={
+                                      <EditOutlined
+                                        style={{
+                                          color: '#5A6062',
+                                          fontSize: '14px',
+                                        }}
+                                      />
+                                    }
+                                    onClick={() =>
+                                      void handleSaveDescriptionEdit()
+                                    }
                                   >
                                     保存
                                   </Button>
@@ -1506,7 +1811,14 @@ const ProgramManagement = () => {
                                 <Button
                                   type="text"
                                   className="program-editor-header-button"
-                                  icon={<EditOutlined style={{ color: '#5A6062', fontSize: '14px' }} />}
+                                  icon={
+                                    <EditOutlined
+                                      style={{
+                                        color: '#5A6062',
+                                        fontSize: '14px',
+                                      }}
+                                    />
+                                  }
                                   onClick={handleStartDescriptionEdit}
                                 >
                                   编辑
@@ -1520,8 +1832,12 @@ const ProgramManagement = () => {
                         <Input.TextArea
                           id="version-description"
                           value={versionDescriptionValue}
-                          onChange={(event) => setVersionDescriptionValue(event.target.value)}
-                          disabled={!isEditingDescription || !versionChangeLogSupported}
+                          onChange={(event) =>
+                            setVersionDescriptionValue(event.target.value)
+                          }
+                          disabled={
+                            !isEditingDescription || !versionChangeLogSupported
+                          }
                           rows={3}
                           className="program-editor-input"
                           placeholder="请输入当前版本说明"
@@ -1536,10 +1852,14 @@ const ProgramManagement = () => {
                     <div>
                       <div className="program-editor-file-head">文件资产</div>
                       <div className="program-editor-file-subhead">
-                        {editorSelectedVersion?.version ? `版本 ${editorSelectedVersion.version}` : '当前编辑草稿'}
+                        {editorSelectedVersion?.version
+                          ? `版本 ${editorSelectedVersion.version}`
+                          : '当前编辑草稿'}
                       </div>
                     </div>
-                    <div className="program-editor-assets-count">共 {editorVersionFiles.length} 个文件</div>
+                    <div className="program-editor-assets-count">
+                      共 {editorVersionFiles.length} 个文件
+                    </div>
                   </div>
 
                   <div className="program-editor-file-table">
@@ -1550,45 +1870,82 @@ const ProgramManagement = () => {
                     <div className="program-editor-file-table-body">
                       {editorVersionFiles.length > 0 ? (
                         editorVersionFiles.map((file) => (
-                          <div key={`version-file-${file.id}`} className="program-editor-file-row">
+                          <div
+                            key={`version-file-${file.id}`}
+                            className="program-editor-file-row"
+                          >
                             <div className="program-editor-file-main">
                               <div className="program-editor-file-icon">
-                                <FileOutlined style={{ color: '#005BC1', fontSize: '16px' }} />
+                                <FileOutlined
+                                  style={{ color: '#005BC1', fontSize: '16px' }}
+                                />
                               </div>
                               <div>
-                                <div className="program-editor-file-title">{file.file_name}</div>
+                                <div className="program-editor-file-title">
+                                  {file.file_name}
+                                </div>
                                 <div className="program-editor-file-caption">
-                                  {file.file_exists === false ? '文件缺失' : '已上传文件'}
+                                  {file.file_exists === false
+                                    ? '文件缺失'
+                                    : '已上传文件'}
                                 </div>
                               </div>
                             </div>
                             <div className="program-editor-file-side">
                               <div className="program-editor-file-info">
                                 <div>{formatFileSize(file.file_size)}</div>
-                                <div>{new Date(file.created_at).toLocaleString('zh-CN', { hour12: false })}</div>
+                                <div>
+                                  {new Date(file.created_at).toLocaleString(
+                                    'zh-CN',
+                                    { hour12: false },
+                                  )}
+                                </div>
                               </div>
                               <div className="program-editor-file-actions">
-                                <Tooltip title={file.file_exists === false ? '文件已缺失，无法下载' : '下载文件'}>
+                                <Tooltip
+                                  title={
+                                    file.file_exists === false
+                                      ? '文件已缺失，无法下载'
+                                      : '下载文件'
+                                  }
+                                >
                                   <div
                                     className={`program-editor-file-action download${file.file_exists === false ? ' disabled' : ''}`}
                                     onClick={() => {
                                       if (file.file_exists === false) {
-                                        message.warning('该文件已被物理删除，请联系管理员清理记录');
+                                        message.warning(
+                                          '该文件已被物理删除，请联系管理员清理记录',
+                                        );
                                         return;
                                       }
-                                      void downloadWithAuth(`/files/download/${file.id}`, file.file_name);
+                                      void downloadWithAuth(
+                                        `/files/download/${file.id}`,
+                                        file.file_name,
+                                      );
                                     }}
                                   >
-                                    <DownloadOutlined style={{ color: '#5A6062', fontSize: '16px' }} />
+                                    <DownloadOutlined
+                                      style={{
+                                        color: '#5A6062',
+                                        fontSize: '16px',
+                                      }}
+                                    />
                                   </div>
                                 </Tooltip>
                                 <Popconfirm
                                   title="确定删除这个文件吗？"
-                                  onConfirm={() => handleDeleteSingleFile(file.id)}
+                                  onConfirm={() =>
+                                    handleDeleteSingleFile(file.id)
+                                  }
                                 >
                                   <Tooltip title="删除文件">
                                     <div className="program-editor-file-action delete">
-                                      <DeleteOutlined style={{ color: '#A83836', fontSize: '16px' }} />
+                                      <DeleteOutlined
+                                        style={{
+                                          color: '#A83836',
+                                          fontSize: '16px',
+                                        }}
+                                      />
                                     </div>
                                   </Tooltip>
                                 </Popconfirm>
@@ -1597,7 +1954,9 @@ const ProgramManagement = () => {
                           </div>
                         ))
                       ) : (
-                        <div className="program-editor-file-empty">当前版本暂无文件。</div>
+                        <div className="program-editor-file-empty">
+                          当前版本暂无文件。
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1654,15 +2013,22 @@ const ProgramManagement = () => {
         destroyOnHidden
         centered
         className="program-view-modal"
-        styles={{ body: { padding: 0 }, content: { padding: 0, background: 'transparent', boxShadow: 'none' } }}
+        styles={{
+          body: { padding: 0 },
+          content: { padding: 0, background: 'transparent', boxShadow: 'none' },
+        }}
       >
         <div className="program-view-shell" data-testid="program-view-overlay">
           <div className="program-view-topbar">
             <div className="program-view-topbar-left">
-              <div className="program-view-title">{currentProgram?.name || '程序详情'} - 程序详情</div>
+              <div className="program-view-title">
+                {currentProgram?.name || '程序详情'} - 程序详情
+              </div>
               <div className="program-view-pill-list">
                 {fileModalAttributePills.map((pill) => (
-                  <div key={pill} className="program-view-pill">{pill}</div>
+                  <div key={pill} className="program-view-pill">
+                    {pill}
+                  </div>
                 ))}
               </div>
             </div>
@@ -1670,7 +2036,11 @@ const ProgramManagement = () => {
               <Button
                 type="text"
                 className="program-view-icon-button"
-                icon={<LeftOutlined style={{ color: '#005BC1', fontSize: '16px' }} />}
+                icon={
+                  <LeftOutlined
+                    style={{ color: '#005BC1', fontSize: '16px' }}
+                  />
+                }
                 onClick={() => setFileModalVisible(false)}
               />
               <Button
@@ -1713,13 +2083,20 @@ const ProgramManagement = () => {
                   <div className="program-view-version-list">
                     {fileModalVersions.map((version) => {
                       const versionKey = getVersionSelectionKey(version);
-                      const selectedKey = getVersionSelectionKey(fileModalSelectedVersion);
-                      const isActive = versionKey !== null && versionKey === selectedKey;
+                      const selectedKey = getVersionSelectionKey(
+                        fileModalSelectedVersion,
+                      );
+                      const isActive =
+                        versionKey !== null && versionKey === selectedKey;
                       return (
                         <button
                           key={version.id}
                           type="button"
-                          onClick={() => setSelectedVersionKey(getVersionSelectionKey(version))}
+                          onClick={() =>
+                            setSelectedVersionKey(
+                              getVersionSelectionKey(version),
+                            )
+                          }
                           className={`program-view-version-item${isActive ? ' active' : ''}`}
                         >
                           <div className="program-view-version-dot">
@@ -1727,11 +2104,20 @@ const ProgramManagement = () => {
                           </div>
                           <div className="program-view-version-content">
                             <div className="program-view-version-row">
-                              <span className="program-view-version-name">{version.version}</span>
-                              {isActive && <span className="program-view-version-current">当前</span>}
+                              <span className="program-view-version-name">
+                                {version.version}
+                              </span>
+                              {isActive && (
+                                <span className="program-view-version-current">
+                                  当前
+                                </span>
+                              )}
                             </div>
                             <div className="program-view-version-date">
-                              {new Date(version.created_at).toLocaleString('zh-CN', { hour12: false })}
+                              {new Date(version.created_at).toLocaleString(
+                                'zh-CN',
+                                { hour12: false },
+                              )}
                             </div>
                           </div>
                         </button>
@@ -1764,28 +2150,43 @@ const ProgramManagement = () => {
               {modalLoading ? (
                 <div className="program-view-empty-state">加载中...</div>
               ) : !fileModalSelectedVersion ? (
-                <div className="program-view-empty-state">请选择左侧版本查看详情</div>
+                <div className="program-view-empty-state">
+                  请选择左侧版本查看详情
+                </div>
               ) : (
                 <div className="program-view-content">
                   <section className="program-view-card program-view-overview-card">
                     <div className="program-view-overview-header">
-                      <div className="program-view-overview-version">{fileModalSelectedVersion.version}</div>
-                      <div className="program-view-overview-heading">当前版本概览</div>
+                      <div className="program-view-overview-version">
+                        {fileModalSelectedVersion.version}
+                      </div>
+                      <div className="program-view-overview-heading">
+                        当前版本概览
+                      </div>
                     </div>
                     <div className="program-view-overview-grid">
                       <div className="program-view-meta-block">
                         <div className="program-view-meta-label">上传者</div>
-                        <div className="program-view-meta-value">{fileModalSelectedVersion.uploader?.name || '系统管理员'}</div>
+                        <div className="program-view-meta-value">
+                          {fileModalSelectedVersion.uploader?.name ||
+                            '系统管理员'}
+                        </div>
                       </div>
                       <div className="program-view-meta-block">
                         <div className="program-view-meta-label">创建时间</div>
-                        <div className="program-view-meta-value">{new Date(fileModalSelectedVersion.created_at).toLocaleString('zh-CN', { hour12: false })}</div>
+                        <div className="program-view-meta-value">
+                          {new Date(
+                            fileModalSelectedVersion.created_at,
+                          ).toLocaleString('zh-CN', { hour12: false })}
+                        </div>
                       </div>
                       <div className="program-view-meta-block program-view-meta-block-wide">
                         <div className="program-view-meta-label">运行状态</div>
                         <div className="program-view-status-row">
                           <span className="program-view-status-dot" />
-                          <span className="program-view-meta-value">{fileModalStatusLabel}</span>
+                          <span className="program-view-meta-value">
+                            {fileModalStatusLabel}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1801,45 +2202,81 @@ const ProgramManagement = () => {
                   <section className="program-view-card">
                     <div className="program-view-assets-header">
                       <div className="program-view-card-title">文件资产</div>
-                      <div className="program-view-assets-count">共 {fileModalVersionFiles.length} 个文件</div>
+                      <div className="program-view-assets-count">
+                        共 {fileModalVersionFiles.length} 个文件
+                      </div>
                     </div>
                     <div className="program-view-file-list">
                       {fileModalVersionFiles.length > 0 ? (
                         fileModalVersionFiles.map((file) => {
-                          const isTextFile = file.file_name.toLowerCase().endsWith('.txt') || file.file_name.toLowerCase().endsWith('.log');
+                          const isTextFile =
+                            file.file_name.toLowerCase().endsWith('.txt') ||
+                            file.file_name.toLowerCase().endsWith('.log');
                           return (
-                            <div key={file.id} className="program-view-file-row">
+                            <div
+                              key={file.id}
+                              className="program-view-file-row"
+                            >
                               <div className="program-view-file-main">
                                 <div className="program-view-file-icon">
                                   {isTextFile ? (
-                                    <FileTextOutlined style={{ color: '#5A6062', fontSize: '18px' }} />
+                                    <FileTextOutlined
+                                      style={{
+                                        color: '#5A6062',
+                                        fontSize: '18px',
+                                      }}
+                                    />
                                   ) : (
-                                    <FileOutlined style={{ color: '#5A6062', fontSize: '18px' }} />
+                                    <FileOutlined
+                                      style={{
+                                        color: '#5A6062',
+                                        fontSize: '18px',
+                                      }}
+                                    />
                                   )}
                                 </div>
                                 <div className="program-view-file-texts">
-                                  <div className="program-view-file-name">{file.file_name}</div>
-                                  <div className="program-view-file-meta">{formatFileSize(file.file_size)} · {getFileTypeLabel(file.file_name)}</div>
+                                  <div className="program-view-file-name">
+                                    {file.file_name}
+                                  </div>
+                                  <div className="program-view-file-meta">
+                                    {formatFileSize(file.file_size)} ·{' '}
+                                    {getFileTypeLabel(file.file_name)}
+                                  </div>
                                 </div>
                               </div>
                               <Button
                                 type="text"
                                 className="program-view-file-action"
-                                icon={<DownloadOutlined style={{ color: '#5A6062', fontSize: '14px' }} />}
+                                icon={
+                                  <DownloadOutlined
+                                    style={{
+                                      color: '#5A6062',
+                                      fontSize: '14px',
+                                    }}
+                                  />
+                                }
                                 disabled={file.file_exists === false}
                                 onClick={() => {
                                   if (file.file_exists === false) {
-                                    message.warning('该文件已被物理删除，请联系管理员清理记录');
+                                    message.warning(
+                                      '该文件已被物理删除，请联系管理员清理记录',
+                                    );
                                     return;
                                   }
-                                  void downloadWithAuth(`/files/download/${file.id}`, file.file_name);
+                                  void downloadWithAuth(
+                                    `/files/download/${file.id}`,
+                                    file.file_name,
+                                  );
                                 }}
                               />
                             </div>
                           );
                         })
                       ) : (
-                        <div className="program-view-empty-inline">当前版本暂无文件</div>
+                        <div className="program-view-empty-inline">
+                          当前版本暂无文件
+                        </div>
                       )}
                     </div>
                   </section>
@@ -2082,7 +2519,7 @@ const ProgramManagement = () => {
                 </Button>
               </>
             )}
-           </div>
+          </div>
         )}
       </Modal>
 
@@ -2110,7 +2547,13 @@ const ProgramManagement = () => {
           showIcon
           style={{ marginBottom: 16 }}
         />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gap: '16px',
+          }}
+        >
           {relatedPrograms?.map((mapping) => {
             const program = mapping.child_program;
             return (
@@ -2128,34 +2571,101 @@ const ProgramManagement = () => {
                   position: 'relative',
                   overflow: 'hidden',
                   border: '1px solid #F1F4F5',
-                  borderLeftWidth: '4px'
+                  borderLeftWidth: '4px',
                 }}
               >
-                <div style={{ padding: '20px 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div
+                  style={{
+                    padding: '20px 24px 16px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                  }}
+                >
                   <div style={{ display: 'flex', gap: '12px' }}>
-                    <div style={{ width: '40px', height: '40px', background: 'rgba(0, 91, 193, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <AppstoreOutlined style={{ color: '#005BC1', fontSize: '20px' }} />
+                    <div
+                      style={{
+                        width: '40px',
+                        height: '40px',
+                        background: 'rgba(0, 91, 193, 0.05)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <AppstoreOutlined
+                        style={{ color: '#005BC1', fontSize: '20px' }}
+                      />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ color: '#2D3335', fontSize: '16px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: '#2D3335',
+                          fontSize: '16px',
+                          fontWeight: 700,
+                          fontFamily: 'Inter, sans-serif',
+                        }}
+                      >
                         {program.name}
                       </div>
-                      <div style={{ color: '#5A6062', fontSize: '12px', fontFamily: 'Liberation Mono, monospace' }}>
+                      <div
+                        style={{
+                          color: '#5A6062',
+                          fontSize: '12px',
+                          fontFamily: 'Liberation Mono, monospace',
+                        }}
+                      >
                         编号: {program.code}
                       </div>
-                      <div style={{ color: '#005BC1', fontSize: '12px', fontWeight: 600 }}>
+                      <div
+                        style={{
+                          color: '#005BC1',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
                         与 {currentProgram?.name} 关联
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div style={{ padding: '12px 24px', borderTop: '1px solid #F1F4F5', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ color: '#5A6062', fontSize: '12px' }}>显示父程序数据：{currentProgram?.version || '暂无版本'}</div>
-                  <div style={{ color: '#5A6062', fontSize: '12px' }}>子程序自身版本数：{program.own_version_count || 0}</div>
+                <div
+                  style={{
+                    padding: '12px 24px',
+                    borderTop: '1px solid #F1F4F5',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ color: '#5A6062', fontSize: '12px' }}>
+                    显示父程序数据：{currentProgram?.version || '暂无版本'}
+                  </div>
+                  <div style={{ color: '#5A6062', fontSize: '12px' }}>
+                    子程序自身版本数：{program.own_version_count || 0}
+                  </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Popconfirm title="确定取消映射?" onConfirm={() => handleDeleteRelation(mapping.id)}>
-                      <span style={{ color: '#A83836', fontSize: '12px', fontWeight: 700, cursor: 'pointer', fontFamily: 'WenQuanYi Zen Hei, sans-serif' }}>
+                    <Popconfirm
+                      title="确定取消映射?"
+                      onConfirm={() => handleDeleteRelation(mapping.id)}
+                    >
+                      <span
+                        style={{
+                          color: '#A83836',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontFamily: 'WenQuanYi Zen Hei, sans-serif',
+                        }}
+                      >
                         取消映射
                       </span>
                     </Popconfirm>
@@ -2165,11 +2675,14 @@ const ProgramManagement = () => {
             );
           })}
         </div>
-        {(!relatedPrograms || relatedPrograms.length === 0) && !modalLoading && (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
-            暂无映射子程序
-          </div>
-        )}
+        {(!relatedPrograms || relatedPrograms.length === 0) &&
+          !modalLoading && (
+            <div
+              style={{ textAlign: 'center', padding: '40px', color: '#999' }}
+            >
+              暂无映射子程序
+            </div>
+          )}
       </Drawer>
 
       {/* 添加映射模态框 */}
@@ -2186,8 +2699,19 @@ const ProgramManagement = () => {
         }}
         onOk={() => relationForm.submit()}
       >
-        <Form form={relationForm} layout="vertical" onFinish={handleAddRelation}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        <Form
+          form={relationForm}
+          layout="vertical"
+          onFinish={handleAddRelation}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1.4fr 1fr 1fr 1fr',
+              gap: '12px',
+              marginBottom: '16px',
+            }}
+          >
             <Input
               value={mappingSearchKeyword}
               onChange={(event) => setMappingSearchKeyword(event.target.value)}
@@ -2196,17 +2720,25 @@ const ProgramManagement = () => {
             />
             <Select
               value={mappingFilterProductionLine ?? undefined}
-              onChange={(value) => setMappingFilterProductionLine(value ?? null)}
+              onChange={(value) =>
+                setMappingFilterProductionLine(value ?? null)
+              }
               placeholder="筛选产线"
               allowClear
-              options={productionLines.map((line) => ({ value: line.id, label: line.name }))}
+              options={productionLines.map((line) => ({
+                value: line.id,
+                label: line.name,
+              }))}
             />
             <Select
               value={mappingFilterVehicleModel ?? undefined}
               onChange={(value) => setMappingFilterVehicleModel(value ?? null)}
               placeholder="筛选车型"
               allowClear
-              options={vehicleModels.map((model) => ({ value: model.id, label: model.name }))}
+              options={vehicleModels.map((model) => ({
+                value: model.id,
+                label: model.name,
+              }))}
             />
             <Select
               value={mappingFilterStatus ?? undefined}
@@ -2221,7 +2753,7 @@ const ProgramManagement = () => {
           </div>
           <Form.Item
             name="child_program_ids"
-            label={`选择要映射的子程序（共 ${mappingCandidatePrograms.length} 个候选）`}
+            label={`选择要映射的子程序（共 ${availableMappingCandidatePrograms.length} 个候选）`}
             rules={[{ required: true, message: '请选择至少一个程序' }]}
           >
             <Select
@@ -2229,9 +2761,10 @@ const ProgramManagement = () => {
               showSearch
               placeholder="从筛选结果中选择多个��程序"
               filterOption={false}
-              options={mappingCandidatePrograms.map((p) => ({
+              options={availableMappingCandidatePrograms.map((p) => ({
                 value: p.id,
-                disabled: (p.own_version_count || 0) > 0 || (p.own_file_count || 0) > 0,
+                disabled:
+                  (p.own_version_count || 0) > 0 || (p.own_file_count || 0) > 0,
                 label: `${p.name} (${p.code}) · ${p.production_line?.name || '-'} · ${p.vehicle_model?.name || '-'}${(p.own_version_count || 0) > 0 || (p.own_file_count || 0) > 0 ? ' · 已有版本/文件，不能映射' : ''}`,
               }))}
               maxTagCount="responsive"

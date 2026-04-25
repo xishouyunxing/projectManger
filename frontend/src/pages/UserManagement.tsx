@@ -54,8 +54,12 @@ const UserManagement = () => {
   const buildUserQueryParams = (page = tablePagination.current, pageSize = tablePagination.pageSize) => ({
     page,
     page_size: pageSize,
+    ...(searchKeyword ? { keyword: searchKeyword } : {}),
     ...(filterDepartment ? { department_id: filterDepartment } : {}),
     ...(filterRole ? { role: filterRole } : {}),
+    ...(filterStatus ? { status: filterStatus } : {}),
+    ...(filterDateRange[0] ? { date_from: filterDateRange[0] } : {}),
+    ...(filterDateRange[1] ? { date_to: filterDateRange[1] } : {}),
   });
 
   const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
@@ -158,49 +162,14 @@ const UserManagement = () => {
     setFilterRole(null);
     setFilterStatus(null);
     setFilterDateRange([null, null]);
-    loadUsers(1, tablePagination.pageSize);
   };
 
   useEffect(() => {
     loadUsers(1, tablePagination.pageSize);
-  }, [filterDepartment, filterRole]);
+  }, [searchKeyword, filterDepartment, filterRole, filterStatus, filterDateRange]);
 
   // 筛选后的用户列表
-  const filteredUsers = users.filter((user: any) => {
-    // 关键词搜索（模糊匹配工号、姓名）
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      const idMatch = user.employee_id?.toLowerCase().includes(keyword);
-      const nameMatch = user.name?.toLowerCase().includes(keyword);
-      if (!idMatch && !nameMatch) {
-        return false;
-      }
-    }
-    if (filterDepartment && user.department_id !== filterDepartment) {
-      return false;
-    }
-    if (filterRole && user.role !== filterRole) {
-      return false;
-    }
-    if (filterStatus && user.status !== filterStatus) {
-      return false;
-    }
-    // 时间筛选
-    if (filterDateRange[0] || filterDateRange[1]) {
-      const userDate = new Date(user.created_at);
-      if (filterDateRange[0]) {
-        const startDate = new Date(filterDateRange[0]);
-        startDate.setHours(0, 0, 0, 0);
-        if (userDate < startDate) return false;
-      }
-      if (filterDateRange[1]) {
-        const endDate = new Date(filterDateRange[1]);
-        endDate.setHours(23, 59, 59, 999);
-        if (userDate > endDate) return false;
-      }
-    }
-    return true;
-  }).sort((a: any, b: any) => {
+  const sortedUsers = [...users].sort((a: any, b: any) => {
     if (selectedUserId) {
       if (a.id === selectedUserId) return -1;
       if (b.id === selectedUserId) return 1;
@@ -479,7 +448,7 @@ const UserManagement = () => {
         <Table
           className="custom-table"
           columns={columns}
-          dataSource={filteredUsers}
+          dataSource={sortedUsers}
           rowKey="id"
           loading={loading}
           pagination={{

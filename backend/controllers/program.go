@@ -3,10 +3,12 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,7 +99,7 @@ func buildProgramParentDataMap(tx *gorm.DB, programIDs []uint) (map[uint]models.
 	return mappingByChildID, parentByID, nil
 }
 
-func buildProgramListResponse(tx *gorm.DB, programs []models.Program) ([]programListItem, error) {
+func buildProgramListResponse(tx *gorm.DB, programs []models.Program, allowedLineIDs map[uint]struct{}) ([]programListItem, error) {
 	response := make([]programListItem, 0, len(programs))
 	if len(programs) == 0 {
 		return response, nil
@@ -127,7 +129,7 @@ func buildProgramListResponse(tx *gorm.DB, programs []models.Program) ([]program
 		effectiveProgram.OwnFileCount = fileCounts[program.ID]
 
 		if mapping, ok := mappingByChildID[program.ID]; ok {
-			if parent, ok := parentByID[mapping.ParentProgramID]; ok {
+			if parent, ok := parentByID[mapping.ParentProgramID]; ok && lineIDAllowed(allowedLineIDs, parent.ProductionLineID) {
 				effectiveProgram.MappingInfo = &models.ProgramMappingInfo{
 					MappingID:         mapping.ID,
 					ParentProgramID:   parent.ID,
@@ -151,6 +153,52 @@ func buildProgramListResponse(tx *gorm.DB, programs []models.Program) ([]program
 	return response, nil
 }
 
+func applyProgramCustomFieldFilters(query *gorm.DB, rawFilters map[uint]string) (*gorm.DB, error) {
+	if len(rawFilters) == 0 {
+		return query, nil
+	}
+
+	fieldIDs := make([]uint, 0, len(rawFilters))
+	for fieldID := range rawFilters {
+		fieldIDs = append(fieldIDs, fieldID)
+	}
+
+	var fields []models.ProductionLineCustomField
+	if err := database.DB.Where("id IN ?", fieldIDs).Find(&fields).Error; err != nil {
+		return nil, err
+	}
+
+	fieldTypeByID := make(map[uint]string, len(fields))
+	for _, field := range fields {
+		fieldTypeByID[field.ID] = field.FieldType
+	}
+
+	for fieldID, value := range rawFilters {
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedValue == "" {
+			continue
+		}
+
+		if fieldTypeByID[fieldID] == "select" {
+			query = query.Where(
+				"EXISTS (SELECT 1 FROM program_custom_field_values pcfv WHERE pcfv.program_id = programs.id AND pcfv.production_line_custom_field_id = ? AND pcfv.value = ?)",
+				fieldID,
+				trimmedValue,
+			)
+			continue
+		}
+
+		likeValue := "%" + strings.ToLower(trimmedValue) + "%"
+		query = query.Where(
+			"EXISTS (SELECT 1 FROM program_custom_field_values pcfv WHERE pcfv.program_id = programs.id AND pcfv.production_line_custom_field_id = ? AND LOWER(COALESCE(pcfv.value, '')) LIKE ?)",
+			fieldID,
+			likeValue,
+		)
+	}
+
+	return query, nil
+}
+
 func GetPrograms(c *gin.Context) {
 	pageQuery := c.Query("page")
 	pageSizeQuery := c.Query("page_size")
@@ -168,7 +216,28 @@ func GetPrograms(c *gin.Context) {
 		return
 	}
 
+	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionView)
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
 	query := database.DB.Model(&models.Program{})
+	if allowedLineIDs != nil {
+		lineIDs := make([]uint, 0, len(allowedLineIDs))
+		for lineID := range allowedLineIDs {
+			lineIDs = append(lineIDs, lineID)
+		}
+		if len(lineIDs) == 0 {
+			if !paged {
+				c.JSON(http.StatusOK, []programListItem{})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"items": []programListItem{}, "total": 0, "page": page, "page_size": pageSize})
+			return
+		}
+		query = query.Where("production_line_id IN ?", lineIDs)
+	}
 	if lineID := c.Query("production_line_id"); lineID != "" {
 		query = query.Where("production_line_id = ?", lineID)
 	}
@@ -182,11 +251,50 @@ func GetPrograms(c *gin.Context) {
 		likeKeyword := "%" + strings.ToLower(keyword) + "%"
 		query = query.Where("LOWER(name) LIKE ? OR LOWER(code) LIKE ?", likeKeyword, likeKeyword)
 	}
+	if dateFrom := strings.TrimSpace(c.Query("date_from")); dateFrom != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateFrom)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_from"})
+			return
+		}
+		query = query.Where("created_at >= ?", parsedDate)
+	}
+	if dateTo := strings.TrimSpace(c.Query("date_to")); dateTo != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateTo)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_to"})
+			return
+		}
+		query = query.Where("created_at < ?", parsedDate.AddDate(0, 0, 1))
+	}
+
+	customFieldFilters := map[uint]string{}
+	for key, values := range c.Request.URL.Query() {
+		if !strings.HasPrefix(key, "custom_field_") || len(values) == 0 {
+			continue
+		}
+
+		fieldID, err := strconv.ParseUint(strings.TrimPrefix(key, "custom_field_"), 10, 64)
+		if err != nil || fieldID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid custom field filter"})
+			return
+		}
+
+		if value := strings.TrimSpace(values[0]); value != "" {
+			customFieldFilters[uint(fieldID)] = value
+		}
+	}
+
+	query, err = applyProgramCustomFieldFilters(query, customFieldFilters)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
+		return
+	}
 
 	var total int64
 	if paged {
 		if err := query.Count(&total).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 			return
 		}
 	}
@@ -203,13 +311,13 @@ func GetPrograms(c *gin.Context) {
 
 	var programs []models.Program
 	if err := query.Find(&programs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
-	response, err := buildProgramListResponse(database.DB, programs)
+	response, err := buildProgramListResponse(database.DB, programs, allowedLineIDs)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -254,7 +362,24 @@ func summarizeEnabledProgramCustomFieldValues(values []models.ProgramCustomField
 }
 
 func ExportProgramsExcel(c *gin.Context) {
+	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionView)
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
 	query := database.DB.Model(&models.Program{})
+	if allowedLineIDs != nil {
+		lineIDs := make([]uint, 0, len(allowedLineIDs))
+		for lineID := range allowedLineIDs {
+			lineIDs = append(lineIDs, lineID)
+		}
+		if len(lineIDs) == 0 {
+			query = query.Where("1 = 0")
+		} else {
+			query = query.Where("production_line_id IN ?", lineIDs)
+		}
+	}
 	if lineID := c.Query("production_line_id"); lineID != "" {
 		query = query.Where("production_line_id = ?", lineID)
 	}
@@ -271,30 +396,24 @@ func ExportProgramsExcel(c *gin.Context) {
 		Preload("VehicleModel").
 		Order("id DESC").
 		Find(&programs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "导出失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
-	}
-
-	for _, program := range programs {
-		if !authorizeLineAction(c, program.ProductionLineID, lineActionView) {
-			return
-		}
 	}
 
 	f := excelize.NewFile()
 	defer func() { _ = f.Close() }()
 
-	sheetName := "程序列表"
+	sheetName := "Programs"
 	defaultSheet := f.GetSheetName(f.GetActiveSheetIndex())
 	if defaultSheet != sheetName {
 		_ = f.SetSheetName(defaultSheet, sheetName)
 	}
 
-	headers := []string{"ID", "程序名称", "程序编码", "生产线", "车型", "状态", "版本", "描述", "创建时间"}
+	headers := []string{"ID", "Program Name", "Program Code", "Production Line", "Vehicle Model", "Status", "Version", "Description", "Created At"}
 	for i, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		if err := f.SetCellValue(sheetName, cell, header); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "导出失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 			return
 		}
 	}
@@ -319,7 +438,7 @@ func ExportProgramsExcel(c *gin.Context) {
 		for colIdx, value := range rowValues {
 			cell, _ := excelize.CoordinatesToCellName(colIdx+1, row)
 			if err := f.SetCellValue(sheetName, cell, value); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "导出失败"})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 				return
 			}
 		}
@@ -327,11 +446,11 @@ func ExportProgramsExcel(c *gin.Context) {
 
 	buffer, err := f.WriteToBuffer()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "导出失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
-	utf8FileName := "程序列表.xlsx"
+	utf8FileName := "programs.xlsx"
 	asciiFallbackFileName := "programs.xlsx"
 	contentDisposition := "attachment; filename=\"" + asciiFallbackFileName + "\"; filename*=UTF-8''" + url.QueryEscape(utf8FileName)
 
@@ -343,7 +462,7 @@ func ExportProgramsExcel(c *gin.Context) {
 func GetProgram(c *gin.Context) {
 	programID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
@@ -355,7 +474,7 @@ func GetProgram(c *gin.Context) {
 		Preload("Versions").
 		Preload("CustomFieldValues").
 		First(&program, programID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, program.ProductionLineID, lineActionView) {
@@ -363,33 +482,91 @@ func GetProgram(c *gin.Context) {
 	}
 
 	if err := attachProgramMappingInfo(database.DB, &program); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 	if program.MappingInfo != nil {
 		parentProgram, _, _, err := resolveProgramTarget(database.DB, program.ID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 			return
 		}
-		applyParentProgramData(&program, parentProgram)
+		allowed, statusCode, message := checkLineAction(c, parentProgram.ProductionLineID, lineActionView)
+		if !allowed {
+			if statusCode != http.StatusForbidden {
+				c.JSON(statusCode, gin.H{"error": message})
+				return
+			}
+			program.MappingInfo = nil
+		} else {
+			applyParentProgramData(&program, parentProgram)
+		}
 	}
 
 	c.JSON(http.StatusOK, program)
 }
 
+type createProgramRequest struct {
+	Name              string                          `json:"name" binding:"required"`
+	Code              string                          `json:"code" binding:"required"`
+	ProductionLineID  uint                            `json:"production_line_id" binding:"required"`
+	VehicleModelID    *uint                           `json:"vehicle_model_id"`
+	Description       string                          `json:"description"`
+	Status            string                          `json:"status"`
+	CustomFieldValues *[]programCustomFieldValueInput `json:"custom_field_values"`
+}
+
 func CreateProgram(c *gin.Context) {
-	var program models.Program
-	if err := c.ShouldBindJSON(&program); err != nil {
+	var req createProgramRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if !authorizeLineAction(c, program.ProductionLineID, lineActionManage) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Code = strings.TrimSpace(req.Code)
+	req.Status = strings.TrimSpace(req.Status)
+	if req.Name == "" || req.Code == "" || req.ProductionLineID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid program payload"})
+		return
+	}
+	if req.Status == "" {
+		req.Status = "in_progress"
+	}
+	if !authorizeLineAction(c, req.ProductionLineID, lineActionManage) {
 		return
 	}
 
-	if err := database.DB.Create(&program).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+	program := models.Program{
+		Name:             req.Name,
+		Code:             req.Code,
+		ProductionLineID: req.ProductionLineID,
+		Description:      req.Description,
+		Status:           req.Status,
+	}
+	if req.VehicleModelID != nil {
+		program.VehicleModelID = *req.VehicleModelID
+	}
+
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&program).Error; err != nil {
+			return err
+		}
+		if req.CustomFieldValues != nil {
+			_, err := replaceProgramCustomFieldValues(tx, program, *req.CustomFieldValues)
+			return err
+		}
+		return nil
+	}); err != nil {
+		switch {
+		case errors.Is(err, errProgramCustomFieldFieldIDRequired),
+			errors.Is(err, errProgramCustomFieldDuplicateFieldID),
+			errors.Is(err, errProgramCustomFieldNotBelongToProductionLine),
+			errors.Is(err, errProgramCustomFieldInvalidSelectValue),
+			errors.Is(err, errProgramCustomFieldDisabled):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
+		}
 		return
 	}
 
@@ -397,29 +574,50 @@ func CreateProgram(c *gin.Context) {
 }
 
 type updateProgramRequest struct {
-	Name             *string `json:"name"`
-	Code             *string `json:"code"`
-	ProductionLineID *uint   `json:"production_line_id"`
-	VehicleModelID   *uint   `json:"vehicle_model_id"`
-	Description      *string `json:"description"`
-	Status           *string `json:"status"`
+	Name              *string                         `json:"name"`
+	Code              *string                         `json:"code"`
+	ProductionLineID  *uint                           `json:"production_line_id"`
+	VehicleModelID    optionalVehicleModelIDUpdate    `json:"vehicle_model_id"`
+	Description       *string                         `json:"description"`
+	Status            *string                         `json:"status"`
+	CustomFieldValues *[]programCustomFieldValueInput `json:"custom_field_values"`
+}
+
+type optionalVehicleModelIDUpdate struct {
+	Set   bool
+	Value *uint
+}
+
+func (o *optionalVehicleModelIDUpdate) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if string(data) == "null" {
+		o.Value = nil
+		return nil
+	}
+
+	var value uint
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	o.Value = &value
+	return nil
 }
 
 func UpdateProgram(c *gin.Context) {
 	programID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	_, targetProgramID, _, err := resolveProgramTarget(database.DB, programID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 
 	var program models.Program
 	if err := database.DB.First(&program, targetProgramID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	originalProductionLineID := program.ProductionLineID
@@ -443,8 +641,12 @@ func UpdateProgram(c *gin.Context) {
 	if req.ProductionLineID != nil {
 		updates["production_line_id"] = *req.ProductionLineID
 	}
-	if req.VehicleModelID != nil {
-		updates["vehicle_model_id"] = *req.VehicleModelID
+	if req.VehicleModelID.Set {
+		if req.VehicleModelID.Value == nil {
+			updates["vehicle_model_id"] = 0
+		} else {
+			updates["vehicle_model_id"] = *req.VehicleModelID.Value
+		}
 	}
 	if req.Description != nil {
 		updates["description"] = *req.Description
@@ -453,8 +655,8 @@ func UpdateProgram(c *gin.Context) {
 		updates["status"] = strings.TrimSpace(*req.Status)
 	}
 
-	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "未提供可更新字段"})
+	if len(updates) == 0 && req.CustomFieldValues == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "????????"})
 		return
 	}
 
@@ -472,6 +674,13 @@ func UpdateProgram(c *gin.Context) {
 		if err := tx.Model(&program).Updates(updates).Error; err != nil {
 			return err
 		}
+
+		updatedProgram := program
+		updatedProgram.ProductionLineID = nextProductionLineID
+		if req.CustomFieldValues != nil {
+			_, err := replaceProgramCustomFieldValues(tx, updatedProgram, *req.CustomFieldValues)
+			return err
+		}
 		if originalProductionLineID != nextProductionLineID {
 			if err := tx.Where("program_id = ?", program.ID).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
 				return err
@@ -479,12 +688,21 @@ func UpdateProgram(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+		switch {
+		case errors.Is(err, errProgramCustomFieldFieldIDRequired),
+			errors.Is(err, errProgramCustomFieldDuplicateFieldID),
+			errors.Is(err, errProgramCustomFieldNotBelongToProductionLine),
+			errors.Is(err, errProgramCustomFieldInvalidSelectValue),
+			errors.Is(err, errProgramCustomFieldDisabled):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
+		}
 		return
 	}
 
 	if err := database.DB.First(&program, targetProgramID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 	c.JSON(http.StatusOK, program)
@@ -493,7 +711,7 @@ func UpdateProgram(c *gin.Context) {
 func DeleteProgram(c *gin.Context) {
 	programID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
@@ -515,53 +733,58 @@ func DeleteProgram(c *gin.Context) {
 			return
 		}
 		if errors.Is(txErr, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "????"})
 }
 
 func GetProgramsByVehicle(c *gin.Context) {
 	vehicleID, err := parseUintParam(c.Param("vehicle_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "车型ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
+	}
+
+	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionView)
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+
+	query := database.DB.
+		Preload("ProductionLine").
+		Preload("ProductionLine.Process").
+		Where("vehicle_model_id = ?", vehicleID)
+	if allowedLineIDs != nil {
+		lineIDs := make([]uint, 0, len(allowedLineIDs))
+		for lineID := range allowedLineIDs {
+			lineIDs = append(lineIDs, lineID)
+		}
+		if len(lineIDs) == 0 {
+			c.JSON(http.StatusOK, []models.Program{})
+			return
+		}
+		query = query.Where("production_line_id IN ?", lineIDs)
 	}
 
 	var programs []models.Program
-	if err := database.DB.
-		Preload("ProductionLine").
-		Preload("ProductionLine.Process").
-		Where("vehicle_model_id = ?", vehicleID).
-		Find(&programs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	if err := query.Find(&programs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
-	filtered := make([]models.Program, 0, len(programs))
-	for _, program := range programs {
-		allowed, statusCode, message := checkLineAction(c, program.ProductionLineID, lineActionView)
-		if !allowed {
-			if statusCode == http.StatusForbidden {
-				continue
-			}
-			c.JSON(statusCode, gin.H{"error": message})
-			return
-		}
-		filtered = append(filtered, program)
-	}
-
-	c.JSON(http.StatusOK, filtered)
+	c.JSON(http.StatusOK, programs)
 }
 
 func GetProgramRelations(c *gin.Context) {
 	programID, err := parseUintParam(c.Param("program_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	if !authorizeProgramAction(c, database.DB, programID, lineActionView) {
@@ -574,7 +797,7 @@ func GetProgramRelations(c *gin.Context) {
 		Preload("RelatedProgram").
 		Where("source_program_id = ? OR related_program_id = ?", programID, programID).
 		Find(&relations).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -595,7 +818,7 @@ func CreateRelation(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&relation).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -605,17 +828,17 @@ func CreateRelation(c *gin.Context) {
 func DeleteRelation(c *gin.Context) {
 	relationID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "关联ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
 	var relation models.ProgramRelation
 	if err := database.DB.First(&relation, relationID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "关联不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 	if !authorizeProgramAction(c, database.DB, relation.SourceProgramID, lineActionManage) {
@@ -627,9 +850,9 @@ func DeleteRelation(c *gin.Context) {
 
 	result := database.DB.Delete(&models.ProgramRelation{}, relationID)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "????"})
 }

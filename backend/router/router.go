@@ -25,8 +25,6 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
-	r.Static("/uploads", config.AppConfig.Storage.UploadsDir)
-
 	public := r.Group("/api")
 	{
 		public.POST("/login", controllers.Login)
@@ -37,7 +35,7 @@ func SetupRouter() *gin.Engine {
 	{
 		users := protected.Group("/users")
 		{
-			users.GET("", controllers.GetUsers)
+			users.GET("", middleware.AdminMiddleware(), controllers.GetUsers)
 			users.GET("/:id", controllers.GetUser)
 			users.POST("", middleware.AdminMiddleware(), controllers.CreateUser)
 			users.PUT("/:id", controllers.UpdateUser)
@@ -138,7 +136,7 @@ func SetupRouter() *gin.Engine {
 		{
 			mappings.GET("/by-parent/:program_id", controllers.GetProgramMappingsByParent)
 			mappings.GET("/by-child/:program_id", controllers.GetProgramMappingByChild)
-				mappings.POST("", controllers.CreateProgramMappings)
+			mappings.POST("", controllers.CreateProgramMappings)
 			mappings.DELETE("/:id", controllers.DeleteProgramMapping)
 		}
 

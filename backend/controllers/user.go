@@ -4,8 +4,12 @@ import (
 	"crane-system/config"
 	"crane-system/database"
 	"crane-system/models"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -20,7 +24,7 @@ func GetUsers(c *gin.Context) {
 	if pageQuery != "" {
 		parsedPage, err := strconv.Atoi(pageQuery)
 		if err != nil || parsedPage < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "page参数格式错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page"})
 			return
 		}
 		page = parsedPage
@@ -30,7 +34,7 @@ func GetUsers(c *gin.Context) {
 	if pageSizeQuery != "" {
 		parsedPageSize, err := strconv.Atoi(pageSizeQuery)
 		if err != nil || parsedPageSize < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "page_size参数格式错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page_size"})
 			return
 		}
 		if parsedPageSize > 200 {
@@ -45,21 +49,44 @@ func GetUsers(c *gin.Context) {
 	if deptID := c.Query("department_id"); deptID != "" {
 		query = query.Where("department_id = ?", deptID)
 	}
-	if role := c.Query("role"); role != "" {
+	if role := strings.TrimSpace(c.Query("role")); role != "" {
 		query = query.Where("role = ?", role)
+	}
+	if status := strings.TrimSpace(c.Query("status")); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		likeKeyword := "%" + strings.ToLower(keyword) + "%"
+		query = query.Where("LOWER(COALESCE(employee_id, '')) LIKE ? OR LOWER(COALESCE(name, '')) LIKE ?", likeKeyword, likeKeyword)
+	}
+	if dateFrom := strings.TrimSpace(c.Query("date_from")); dateFrom != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateFrom)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_from"})
+			return
+		}
+		query = query.Where("created_at >= ?", parsedDate)
+	}
+	if dateTo := strings.TrimSpace(c.Query("date_to")); dateTo != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateTo)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_to"})
+			return
+		}
+		query = query.Where("created_at < ?", parsedDate.AddDate(0, 0, 1))
 	}
 
 	var total int64
 	if paged {
 		if err := query.Model(&models.User{}).Count(&total).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 			return
 		}
 		query = query.Offset((page - 1) * pageSize).Limit(pageSize)
 	}
 
 	if err := query.Find(&users).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
@@ -121,43 +148,135 @@ func CreateUser(c *gin.Context) {
 func UpdateUser(c *gin.Context) {
 	targetID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "???ID??????"})
 		return
 	}
 
 	var user models.User
 	if err := database.DB.First(&user, targetID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "????????"})
 		return
 	}
 
-	// 只允许管理员或本人更新
 	userID, _ := c.Get("user_id")
 	userRole, _ := c.Get("user_role")
 	if userRole != "admin" && userID != user.ID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权限"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "?????"})
 		return
 	}
 
-	var updates map[string]interface{}
-	if err := c.ShouldBindJSON(&updates); err != nil {
+	var payload map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 防止修改密码和敏感字段
-	delete(updates, "password")
-	if userRole != "admin" {
-		delete(updates, "role")
-		delete(updates, "status")
+	updates, err := buildUserUpdates(payload, userRole == "admin")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "????????????"})
+		return
 	}
 
 	if err := database.DB.Model(&user).Updates(updates).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
+		return
+	}
+
+	if err := database.DB.Preload("Department").First(&user, targetID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[string]interface{}, error) {
+	updates := map[string]interface{}{}
+
+	for field, raw := range payload {
+		switch field {
+		case "name":
+			value, err := parseJSONStringField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if value == "" {
+				return nil, invalidUserFieldValue(field)
+			}
+			updates["name"] = value
+		case "employee_id":
+			if !isAdmin {
+				continue
+			}
+			value, err := parseJSONStringField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if value == "" {
+				return nil, invalidUserFieldValue(field)
+			}
+			updates["employee_id"] = value
+		case "department_id":
+			if !isAdmin {
+				continue
+			}
+			if string(raw) == "null" {
+				updates["department_id"] = nil
+				continue
+			}
+			var value uint
+			if err := json.Unmarshal(raw, &value); err != nil || value == 0 {
+				return nil, invalidUserFieldValue(field)
+			}
+			updates["department_id"] = value
+		case "role":
+			if !isAdmin {
+				continue
+			}
+			value, err := parseJSONStringField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if value != "admin" && value != "user" {
+				return nil, invalidUserFieldValue(field)
+			}
+			updates["role"] = value
+		case "status":
+			if !isAdmin {
+				continue
+			}
+			value, err := parseJSONStringField(raw, field)
+			if err != nil {
+				return nil, err
+			}
+			if value != "active" && value != "inactive" {
+				return nil, invalidUserFieldValue(field)
+			}
+			updates["status"] = value
+		case "password", "id", "created_at", "updated_at", "deleted_at":
+			continue
+		default:
+			continue
+		}
+	}
+
+	return updates, nil
+}
+
+func parseJSONStringField(raw json.RawMessage, field string) (string, error) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s ??????", field)
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func invalidUserFieldValue(field string) error {
+	return fmt.Errorf("%s ??????", field)
 }
 
 func DeleteUser(c *gin.Context) {

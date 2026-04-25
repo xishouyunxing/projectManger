@@ -26,6 +26,9 @@ func GetProductionLineCustomFields(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "生产线ID格式错误"})
 		return
 	}
+	if !authorizeLineAction(c, lineID, lineActionView) {
+		return
+	}
 	if _, err := findProductionLine(lineID); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})

@@ -49,47 +49,18 @@ const VehicleModelManagement = () => {
   const allSeries = [...new Set(vehicleModels.map((m: any) => m.series).filter(Boolean))];
 
   // 筛选后的车型列表
-  const filteredVehicleModels = vehicleModels.filter((model: any) => {
-    // 关键词搜索（模糊匹配名称和编号）
-    if (searchKeyword) {
-      const keyword = searchKeyword.toLowerCase();
-      const nameMatch = model.name?.toLowerCase().includes(keyword);
-      const codeMatch = model.code?.toLowerCase().includes(keyword);
-      if (!nameMatch && !codeMatch) {
-        return false;
-      }
-    }
-    if (filterSeries && model.series !== filterSeries) {
-      return false;
-    }
-    // 时间筛选
-    if (filterDateRange[0] || filterDateRange[1]) {
-      const modelDate = new Date(model.created_at);
-      if (filterDateRange[0]) {
-        const startDate = new Date(filterDateRange[0]);
-        startDate.setHours(0, 0, 0, 0);
-        if (modelDate < startDate) return false;
-      }
-      if (filterDateRange[1]) {
-        const endDate = new Date(filterDateRange[1]);
-        endDate.setHours(23, 59, 59, 999);
-        if (modelDate > endDate) return false;
-      }
-    }
-    return true;
-  });
+  
 
   // 重置筛选
   const handleResetFilter = () => {
     setFilterSeries(null);
     setSearchKeyword('');
     setFilterDateRange([null, null]);
-    loadData(1, tablePagination.pageSize);
   };
 
   useEffect(() => {
     loadData(1, tablePagination.pageSize);
-  }, [filterSeries]);
+  }, [searchKeyword, filterSeries, filterDateRange]);
 
   useEffect(() => {
     loadData();
@@ -103,7 +74,10 @@ const VehicleModelManagement = () => {
           params: {
             page,
             page_size: pageSize,
+            ...(searchKeyword ? { keyword: searchKeyword } : {}),
             ...(filterSeries ? { series: filterSeries } : {}),
+            ...(filterDateRange[0] ? { date_from: filterDateRange[0] } : {}),
+            ...(filterDateRange[1] ? { date_to: filterDateRange[1] } : {}),
           },
         }),
         api.get('/production-lines'),
@@ -396,7 +370,7 @@ const VehicleModelManagement = () => {
         <Table
           className="custom-table"
           columns={columns}
-          dataSource={filteredVehicleModels}
+          dataSource={vehicleModels}
           rowKey="id"
           loading={loading}
           pagination={{

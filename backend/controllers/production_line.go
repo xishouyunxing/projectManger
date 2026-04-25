@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
 func GetProductionLines(c *gin.Context) {
 	pageQuery := c.Query("page")
 	pageSizeQuery := c.Query("page_size")
@@ -18,7 +20,7 @@ func GetProductionLines(c *gin.Context) {
 	if pageQuery != "" {
 		parsedPage, err := strconv.Atoi(pageQuery)
 		if err != nil || parsedPage < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "page参数格式错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page"})
 			return
 		}
 		page = parsedPage
@@ -28,7 +30,7 @@ func GetProductionLines(c *gin.Context) {
 	if pageSizeQuery != "" {
 		parsedPageSize, err := strconv.Atoi(pageSizeQuery)
 		if err != nil || parsedPageSize < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "page_size参数格式错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid page_size"})
 			return
 		}
 		if parsedPageSize > 200 {
@@ -39,25 +41,68 @@ func GetProductionLines(c *gin.Context) {
 
 	var lines []models.ProductionLine
 	query := database.DB.Preload("Process")
+	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionView)
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"error": message})
+		return
+	}
+	if allowedLineIDs != nil {
+		lineIDs := make([]uint, 0, len(allowedLineIDs))
+		for lineID := range allowedLineIDs {
+			lineIDs = append(lineIDs, lineID)
+		}
+		if len(lineIDs) == 0 {
+			if !paged {
+				c.JSON(http.StatusOK, []models.ProductionLine{})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"items": []models.ProductionLine{}, "total": 0, "page": page, "page_size": pageSize})
+			return
+		}
+		query = query.Where("id IN ?", lineIDs)
+	}
 
-	if lineType := c.Query("type"); lineType != "" {
+	if lineType := strings.TrimSpace(c.Query("type")); lineType != "" {
 		query = query.Where("type = ?", lineType)
+	}
+	if status := strings.TrimSpace(c.Query("status")); status != "" {
+		query = query.Where("status = ?", status)
 	}
 	if processID := c.Query("process_id"); processID != "" {
 		query = query.Where("process_id = ?", processID)
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		likeKeyword := "%" + strings.ToLower(keyword) + "%"
+		query = query.Where("LOWER(COALESCE(name, '')) LIKE ? OR LOWER(COALESCE(code, '')) LIKE ? OR LOWER(COALESCE(description, '')) LIKE ?", likeKeyword, likeKeyword, likeKeyword)
+	}
+	if dateFrom := strings.TrimSpace(c.Query("date_from")); dateFrom != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateFrom)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_from"})
+			return
+		}
+		query = query.Where("created_at >= ?", parsedDate)
+	}
+	if dateTo := strings.TrimSpace(c.Query("date_to")); dateTo != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateTo)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_to"})
+			return
+		}
+		query = query.Where("created_at < ?", parsedDate.AddDate(0, 0, 1))
 	}
 
 	var total int64
 	if paged {
 		if err := query.Model(&models.ProductionLine{}).Count(&total).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 			return
 		}
 		query = query.Offset((page - 1) * pageSize).Limit(pageSize)
 	}
 
 	if err := query.Find(&lines).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
@@ -84,6 +129,9 @@ func GetProductionLine(c *gin.Context) {
 	var line models.ProductionLine
 	if err := database.DB.Preload("Process").Preload("Programs").First(&line, lineID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "生产线不存在"})
+		return
+	}
+	if !authorizeLineAction(c, line.ID, lineActionView) {
 		return
 	}
 

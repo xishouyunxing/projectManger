@@ -85,10 +85,10 @@ export interface WorkstationInfo {
 }
 
 export interface BatchImportPreview {
+  preview_id: string;
   workstations: WorkstationInfo[];
   total_programs: number;
   total_files: number;
-  temp_dir: string;
 }
 
 export interface WorkstationMapping {
@@ -113,7 +113,7 @@ export interface ProgramFormValues {
   code?: string;
   status?: string;
   production_line_id?: number;
-  vehicle_model_id?: number;
+  vehicle_model_id?: number | null;
   description?: string;
   custom_field_values?: Record<string, string>;
 }

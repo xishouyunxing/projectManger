@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"archive/zip"
-	"bytes"
 	"crane-system/database"
 	"crane-system/models"
 	"crane-system/utils"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -21,12 +21,12 @@ import (
 func GetProgramVersions(c *gin.Context) {
 	targetProgramID, err := parseUintParam(c.Param("program_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, targetProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionView) {
@@ -40,7 +40,7 @@ func GetProgramVersions(c *gin.Context) {
 		Where("program_id = ?", targetProgramID).
 		Order("created_at DESC").
 		Find(&versions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -48,27 +48,85 @@ func GetProgramVersions(c *gin.Context) {
 }
 
 func CreateVersion(c *gin.Context) {
-	var version models.ProgramVersion
-	if err := c.ShouldBindJSON(&version); err != nil {
+	var req struct {
+		ProgramID uint   `json:"program_id" binding:"required"`
+		Version   string `json:"version" binding:"required"`
+		FileID    uint   `json:"file_id" binding:"required"`
+		ChangeLog string `json:"change_log"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Version = strings.TrimSpace(req.Version)
+	if req.Version == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "version is required"})
+		return
+	}
 
-	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, version.ProgramID)
+	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, req.ProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionManage) {
 		return
 	}
 
-	version.ProgramID = targetProgramID
 	userID, _ := c.Get("user_id")
-	version.UploadedBy = userID.(uint)
+	uploadedBy := userID.(uint)
 
-	if err := database.DB.Create(&version).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+	var file models.ProgramFile
+	if err := database.DB.Where("id = ? AND program_id = ?", req.FileID, targetProgramID).First(&file).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file_id does not belong to the target program"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
+		return
+	}
+	if strings.TrimSpace(file.Version) != req.Version {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file version does not match requested version"})
+		return
+	}
+
+	var version models.ProgramVersion
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var existing models.ProgramVersion
+		if err := tx.Where("program_id = ? AND version = ?", targetProgramID, req.Version).First(&existing).Error; err == nil {
+			return fmt.Errorf("duplicate_version")
+		} else if err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+
+		var versionCount int64
+		if err := tx.Model(&models.ProgramVersion{}).Where("program_id = ?", targetProgramID).Count(&versionCount).Error; err != nil {
+			return err
+		}
+
+		version = models.ProgramVersion{
+			ProgramID:  targetProgramID,
+			Version:    req.Version,
+			FileID:     file.ID,
+			UploadedBy: uploadedBy,
+			ChangeLog:  req.ChangeLog,
+			IsCurrent:  versionCount == 0,
+		}
+		if err := tx.Create(&version).Error; err != nil {
+			return err
+		}
+		if version.IsCurrent {
+			if err := tx.Model(&models.Program{}).Where("id = ?", targetProgramID).Update("version", version.Version).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		if err.Error() == "duplicate_version" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "version already exists"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -78,19 +136,19 @@ func CreateVersion(c *gin.Context) {
 func UpdateVersion(c *gin.Context) {
 	versionID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "版本ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
 	var version models.ProgramVersion
 	if err := database.DB.First(&version, versionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "版本不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 
 	targetProgram, _, _, err := resolveProgramTarget(database.DB, version.ProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionManage) {
@@ -106,7 +164,7 @@ func UpdateVersion(c *gin.Context) {
 	}
 
 	if err := database.DB.Model(&version).Update("change_log", payload.ChangeLog).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
 	}
 
@@ -117,19 +175,19 @@ func UpdateVersion(c *gin.Context) {
 func ActivateVersion(c *gin.Context) {
 	versionID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "版本ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 
 	var version models.ProgramVersion
 	if err := database.DB.First(&version, versionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "版本不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 
 	targetProgram, _, _, err := resolveProgramTarget(database.DB, version.ProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionManage) {
@@ -164,7 +222,7 @@ func ActivateVersion(c *gin.Context) {
 		version.IsCurrent = true
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "激活版本失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
@@ -174,12 +232,12 @@ func ActivateVersion(c *gin.Context) {
 func DownloadProgramLatestVersion(c *gin.Context) {
 	targetProgramID, err := parseUintParam(c.Param("program_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, targetProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionDownload) {
@@ -187,31 +245,28 @@ func DownloadProgramLatestVersion(c *gin.Context) {
 	}
 	program := targetProgram
 
+	versionRecord, err := resolveDownloadVersion(database.DB, targetProgramID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "???????"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
+		return
+	}
+
 	var files []models.ProgramFile
 	if err := database.DB.
 		Preload("Uploader").
-		Where("program_id = ?", targetProgramID).
-		Order("version DESC, created_at DESC").
+		Where("program_id = ? AND version = ?", targetProgramID, versionRecord.Version).
+		Order("created_at DESC").
 		Find(&files).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
 	if len(files) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "该程序暂无文件"})
-		return
-	}
-
-	latestVersion := files[0].Version
-	var latestFiles []models.ProgramFile
-	for _, file := range files {
-		if file.Version == latestVersion {
-			latestFiles = append(latestFiles, file)
-		}
-	}
-
-	if len(latestFiles) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "最新版本暂无文件"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "????????"})
 		return
 	}
 
@@ -219,8 +274,8 @@ func DownloadProgramLatestVersion(c *gin.Context) {
 	if programCode == "" {
 		programCode = strconv.FormatUint(uint64(targetProgramID), 10)
 	}
-	zipFileName := fmt.Sprintf("%s_%s.zip", programCode, latestVersion)
-	createAndDownloadZip(c, latestFiles, zipFileName)
+	zipFileName := fmt.Sprintf("%s_%s.zip", programCode, versionRecord.Version)
+	createAndDownloadZip(c, files, zipFileName)
 }
 
 func DownloadVersionFiles(c *gin.Context) {
@@ -237,12 +292,12 @@ func DownloadVersionFiles(c *gin.Context) {
 
 	targetProgramID, err := parseUintParam(programID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "程序ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "??ID????"})
 		return
 	}
 	targetProgram, targetProgramID, _, err := resolveProgramTarget(database.DB, targetProgramID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "程序不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
 		return
 	}
 	if !authorizeLineAction(c, targetProgram.ProductionLineID, lineActionDownload) {
@@ -256,12 +311,12 @@ func DownloadVersionFiles(c *gin.Context) {
 		Where("program_id = ? AND version = ?", targetProgramID, version).
 		Order("created_at DESC").
 		Find(&files).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询文件失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "??????"})
 		return
 	}
 
 	if len(files) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "该版本暂无文件"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "???????"})
 		return
 	}
 
@@ -274,25 +329,21 @@ func DownloadVersionFiles(c *gin.Context) {
 }
 
 func createAndDownloadZip(c *gin.Context, files []models.ProgramFile, zipFileName string) {
-	buffer := bytes.NewBuffer(nil)
-	zipWriter := zip.NewWriter(buffer)
-
 	uploadDir := utils.UploadDir()
-	writtenEntries := 0
+	type resolvedZipEntry struct {
+		FilePath  string
+		EntryName string
+	}
+
+	resolvedEntries := make([]resolvedZipEntry, 0, len(files))
 	for _, file := range files {
 		filePath := filepath.Join(uploadDir, file.FilePath)
 		if !utils.FileExists(filePath) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "文件已被移动或删除"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "?????????"})
 			return
 		}
 		if !utils.IsSafePath(uploadDir, filePath) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "文件路径不安全"})
-			return
-		}
-
-		fileReader, err := os.Open(filePath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取文件失败"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "???????"})
 			return
 		}
 
@@ -300,36 +351,48 @@ func createAndDownloadZip(c *gin.Context, files []models.ProgramFile, zipFileNam
 		if len(files) > 1 {
 			zipEntryName = fmt.Sprintf("%d_%s", file.ID, file.FileName)
 		}
-
-		zipFileWriter, err := zipWriter.Create(zipEntryName)
-		if err != nil {
-			_ = fileReader.Close()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建压缩包失败"})
-			return
-		}
-
-		if _, err := io.Copy(zipFileWriter, fileReader); err != nil {
-			_ = fileReader.Close()
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入压缩包失败"})
-			return
-		}
-		if err := fileReader.Close(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取文件失败"})
-			return
-		}
-		writtenEntries++
+		resolvedEntries = append(resolvedEntries, resolvedZipEntry{
+			FilePath:  filePath,
+			EntryName: zipEntryName,
+		})
 	}
 
-	if writtenEntries == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "该版本暂无可下载文件"})
-		return
-	}
-	if err := zipWriter.Close(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成压缩包失败"})
+	if len(resolvedEntries) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "??????????"})
 		return
 	}
 
 	c.Header("Content-Type", "application/zip")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", zipFileName))
-	c.Data(http.StatusOK, "application/zip", buffer.Bytes())
+	c.Status(http.StatusOK)
+
+	zipWriter := zip.NewWriter(c.Writer)
+	for _, entry := range resolvedEntries {
+		fileReader, err := os.Open(entry.FilePath)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+
+		zipFileWriter, err := zipWriter.Create(entry.EntryName)
+		if err != nil {
+			_ = fileReader.Close()
+			_ = c.Error(err)
+			return
+		}
+
+		if _, err := io.Copy(zipFileWriter, fileReader); err != nil {
+			_ = fileReader.Close()
+			_ = c.Error(err)
+			return
+		}
+		if err := fileReader.Close(); err != nil {
+			_ = c.Error(err)
+			return
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		_ = c.Error(err)
+	}
 }

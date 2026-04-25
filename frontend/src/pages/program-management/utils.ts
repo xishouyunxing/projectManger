@@ -60,8 +60,19 @@ export const buildBaseProgramPayload = (values: any, fallbackDescription?: strin
   if (typeof baseValues.description !== 'string') {
     baseValues.description = fallbackDescription || '';
   }
+  if (
+    Object.prototype.hasOwnProperty.call(baseValues, 'vehicle_model_id') &&
+    (baseValues.vehicle_model_id === undefined || baseValues.vehicle_model_id === '')
+  ) {
+    baseValues.vehicle_model_id = null;
+  }
   return baseValues;
 };
+
+export const buildProgramMutationPayload = (values: any, fallbackDescription?: string) => ({
+  ...buildBaseProgramPayload(values, fallbackDescription),
+  custom_field_values: buildCustomFieldValuesPayload(values).values,
+});
 
 export const buildCustomFieldValuesPayload = (values: any) => {
   const customFieldValues = values?.custom_field_values;

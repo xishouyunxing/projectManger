@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Layout as AntLayout,
@@ -30,7 +30,8 @@ import {
 import type { MenuProps } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
-import GlobalSearch from './GlobalSearch';
+
+const GlobalSearch = lazy(() => import('./GlobalSearch'));
 
 const { Header, Content } = AntLayout;
 const { Title } = Typography;
@@ -399,10 +400,14 @@ const Layout = () => {
         </Form>
       </Modal>
 
-      <GlobalSearch
-        open={searchVisible}
-        onClose={() => setSearchVisible(false)}
-      />
+      {searchVisible ? (
+        <Suspense fallback={null}>
+          <GlobalSearch
+            open={searchVisible}
+            onClose={() => setSearchVisible(false)}
+          />
+        </Suspense>
+      ) : null}
     </AntLayout>
   );
 };
