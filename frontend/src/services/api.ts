@@ -11,6 +11,32 @@ const api = axios.create({
   },
 });
 
+const normalizeApiPath = (url?: string) => {
+  if (!url) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.pathname.replace(/^\/api(?=\/|$)/, '');
+  } catch {
+    return url.split('?')[0].replace(/^\/api(?=\/|$)/, '');
+  }
+};
+
+export const shouldRedirectToLoginOnUnauthorized = (error: any) => {
+  if (error.response?.status !== 401) {
+    return false;
+  }
+
+  const requestPath = normalizeApiPath(error.config?.url);
+  if (requestPath === '/login') {
+    return false;
+  }
+
+  return window.location.pathname !== '/login';
+};
+
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config) => {
@@ -33,10 +59,11 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (shouldRedirectToLoginOnUnauthorized(error)) {
       // Unauthorized - clear token and redirect to login
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      localStorage.removeItem('lastActivity');
       window.location.href = '/login';
     }
     return Promise.reject(error);
