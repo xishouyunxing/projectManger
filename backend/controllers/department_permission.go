@@ -3,9 +3,11 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetDepartmentPermissions(c *gin.Context) {
@@ -34,8 +36,17 @@ func CreateDepartmentPermission(c *gin.Context) {
 		return
 	}
 
+	if err := validateDepartmentPermissionRelations(permission.DepartmentID, permission.ProductionLineID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	var existing models.DepartmentPermission
 	err := database.DB.Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&existing).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
 	if err == nil {
 		existing.CanView = permission.CanView
 		existing.CanDownload = permission.CanDownload
@@ -55,6 +66,33 @@ func CreateDepartmentPermission(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, permission)
+}
+
+func validateDepartmentPermissionRelations(departmentID, productionLineID uint) error {
+	if departmentID == 0 {
+		return errors.New("invalid department")
+	}
+	if productionLineID == 0 {
+		return errors.New("invalid production line")
+	}
+
+	var department models.Department
+	if err := database.DB.Select("id").First(&department, departmentID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("invalid department")
+		}
+		return err
+	}
+
+	var line models.ProductionLine
+	if err := database.DB.Select("id").First(&line, productionLineID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("invalid production line")
+		}
+		return err
+	}
+
+	return nil
 }
 
 type updateDepartmentPermissionRequest struct {
@@ -160,7 +198,13 @@ func GetUserEffectivePermissions(c *gin.Context) {
 	database.DB.Where("user_id = ?", targetID).Find(&userPermissions)
 	userPermMap := make(map[uint]models.UserPermission)
 	for _, perm := range userPermissions {
-		userPermMap[perm.ProductionLineID] = perm
+		existing := userPermMap[perm.ProductionLineID]
+		existing.ProductionLineID = perm.ProductionLineID
+		existing.CanView = existing.CanView || perm.CanView
+		existing.CanDownload = existing.CanDownload || perm.CanDownload
+		existing.CanUpload = existing.CanUpload || perm.CanUpload
+		existing.CanManage = existing.CanManage || perm.CanManage
+		userPermMap[perm.ProductionLineID] = existing
 	}
 
 	var deptPermissions []models.DepartmentPermission

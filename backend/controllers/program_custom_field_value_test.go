@@ -82,10 +82,12 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 		}
 		permissions := api.Group("/permissions")
 		{
+			permissions.POST("", middleware.AdminMiddleware(), CreatePermission)
 			permissions.GET("/user/:user_id", GetUserPermissions)
 		}
 		effectivePermissions := api.Group("/department-permissions")
 		{
+			effectivePermissions.POST("", middleware.AdminMiddleware(), CreateDepartmentPermission)
 			effectivePermissions.GET("/user/:user_id/effective", GetUserEffectivePermissions)
 		}
 	}
@@ -977,6 +979,90 @@ func TestPermissionRoutesRejectInvalidUserIDFormat(t *testing.T) {
 	}
 }
 
+func TestCreatePermissionUpsertsPerUserAndLineAndValidatesRelations(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	user := models.User{
+		Name:       "Permission User",
+		Password:   "hashed",
+		EmployeeID: "EMP-PERM-001",
+		Role:       "user",
+		Status:     "active",
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/permissions", token, map[string]any{
+		"user_id":            user.ID + 999,
+		"production_line_id": line.ID,
+		"can_view":           true,
+	})
+	if invalidResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid user status 400, got %d body=%s", invalidResp.Code, invalidResp.Body.String())
+	}
+
+	createResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/permissions", token, map[string]any{
+		"user_id":            user.ID,
+		"production_line_id": line.ID,
+		"can_view":           true,
+		"can_upload":         true,
+	})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+
+	updateResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/permissions", token, map[string]any{
+		"user_id":            user.ID,
+		"production_line_id": line.ID,
+		"can_view":           false,
+		"can_download":       true,
+		"can_upload":         false,
+		"can_manage":         true,
+	})
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("expected duplicate create to update with status 200, got %d body=%s", updateResp.Code, updateResp.Body.String())
+	}
+
+	var permissions []models.UserPermission
+	if err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, line.ID).Find(&permissions).Error; err != nil {
+		t.Fatalf("query permissions: %v", err)
+	}
+	if len(permissions) != 1 {
+		t.Fatalf("expected one user-line permission row, got %#v", permissions)
+	}
+	if permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || !permissions[0].CanManage {
+		t.Fatalf("expected permission to be updated in-place, got %#v", permissions[0])
+	}
+}
+
+func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	department := models.Department{Name: "Permission Department", Description: "dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/department-permissions", token, map[string]any{
+		"department_id":      department.ID + 999,
+		"production_line_id": line.ID,
+		"can_view":           true,
+	})
+	if invalidResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid department status 400, got %d body=%s", invalidResp.Code, invalidResp.Body.String())
+	}
+
+	createResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/department-permissions", token, map[string]any{
+		"department_id":      department.ID,
+		"production_line_id": line.ID,
+		"can_view":           true,
+	})
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected department permission create status 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+}
+
 func TestExportProgramsExcelReturnsAttachment(t *testing.T) {
 	r, token, _, _ := setupProgramCustomFieldValueTest(t)
 
@@ -1282,6 +1368,73 @@ func TestGetProgramFilesMarksNewestVersionCurrentWhenVersionRowsAreMissing(t *te
 	}
 	if payload.Versions[1].Version != "older" || payload.Versions[1].IsCurrent {
 		t.Fatalf("expected older version to remain non-current, got %+v", payload.Versions[1])
+	}
+}
+
+func TestGetProgramRelationsFiltersUnauthorizedRelatedPrograms(t *testing.T) {
+	r, token, lineA, lineB := setupVehicleModelPermissionTest(t)
+
+	allowedProgram := models.Program{
+		Name:             "Allowed Relation Program",
+		Code:             "PROG-REL-001",
+		ProductionLineID: lineA.ID,
+		Status:           "in_progress",
+	}
+	if err := database.DB.Create(&allowedProgram).Error; err != nil {
+		t.Fatalf("create allowed program: %v", err)
+	}
+
+	blockedProgram := models.Program{
+		Name:             "Blocked Relation Program",
+		Code:             "PROG-REL-002",
+		ProductionLineID: lineB.ID,
+		Status:           "in_progress",
+	}
+	if err := database.DB.Create(&blockedProgram).Error; err != nil {
+		t.Fatalf("create blocked program: %v", err)
+	}
+
+	visibleProgram := models.Program{
+		Name:             "Visible Relation Program",
+		Code:             "PROG-REL-003",
+		ProductionLineID: lineA.ID,
+		Status:           "in_progress",
+	}
+	if err := database.DB.Create(&visibleProgram).Error; err != nil {
+		t.Fatalf("create visible program: %v", err)
+	}
+
+	hiddenRelation := models.ProgramRelation{
+		SourceProgramID:  allowedProgram.ID,
+		RelatedProgramID: blockedProgram.ID,
+		RelationType:     "same_program",
+	}
+	if err := database.DB.Create(&hiddenRelation).Error; err != nil {
+		t.Fatalf("create hidden relation: %v", err)
+	}
+	visibleRelation := models.ProgramRelation{
+		SourceProgramID:  allowedProgram.ID,
+		RelatedProgramID: visibleProgram.ID,
+		RelationType:     "same_program",
+	}
+	if err := database.DB.Create(&visibleRelation).Error; err != nil {
+		t.Fatalf("create visible relation: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/program-relations/program/%d", allowedProgram.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	payload := decodeProductionLineCustomFieldResponse[[]models.ProgramRelation](t, resp)
+	if len(payload) != 1 {
+		t.Fatalf("expected only one visible relation, got %#v", payload)
+	}
+	if payload[0].ID != visibleRelation.ID {
+		t.Fatalf("expected visible relation %d, got %#v", visibleRelation.ID, payload)
+	}
+	if payload[0].RelatedProgramID == blockedProgram.ID || payload[0].RelatedProgram.ID == blockedProgram.ID {
+		t.Fatalf("expected unauthorized related program to be filtered, got %#v", payload[0])
 	}
 }
 

@@ -3,9 +3,11 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetPermissions(c *gin.Context) {
@@ -34,12 +36,67 @@ func CreatePermission(c *gin.Context) {
 		return
 	}
 
+	if err := validateUserPermissionRelations(permission.UserID, permission.ProductionLineID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var existing models.UserPermission
+	err := database.DB.Where("user_id = ? AND production_line_id = ?", permission.UserID, permission.ProductionLineID).First(&existing).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	if err == nil {
+		existing.CanView = permission.CanView
+		existing.CanDownload = permission.CanDownload
+		existing.CanUpload = permission.CanUpload
+		existing.CanManage = permission.CanManage
+		if err := database.DB.Save(&existing).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+			return
+		}
+		if err := database.DB.Preload("User").Preload("User.Department").Preload("ProductionLine").First(&existing, existing.ID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+			return
+		}
+		c.JSON(http.StatusOK, existing)
+		return
+	}
+
 	if err := database.DB.Create(&permission).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
 		return
 	}
 
 	c.JSON(http.StatusCreated, permission)
+}
+
+func validateUserPermissionRelations(userID, productionLineID uint) error {
+	if userID == 0 {
+		return errors.New("invalid user")
+	}
+	if productionLineID == 0 {
+		return errors.New("invalid production line")
+	}
+
+	var user models.User
+	if err := database.DB.Select("id").First(&user, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("invalid user")
+		}
+		return err
+	}
+
+	var line models.ProductionLine
+	if err := database.DB.Select("id").First(&line, productionLineID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("invalid production line")
+		}
+		return err
+	}
+
+	return nil
 }
 
 type updatePermissionRequest struct {
@@ -106,7 +163,7 @@ func DeletePermission(c *gin.Context) {
 		return
 	}
 
-	result := database.DB.Delete(&models.UserPermission{}, permissionID)
+	result := database.DB.Unscoped().Delete(&models.UserPermission{}, permissionID)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return

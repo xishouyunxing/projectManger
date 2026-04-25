@@ -83,12 +83,12 @@ func checkLineAction(c *gin.Context, productionLineID uint, action linePermissio
 	canUpload := false
 	canManage := false
 
-	var userPermission models.UserPermission
-	err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, productionLineID).First(&userPermission).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
+	var userPermissions []models.UserPermission
+	err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, productionLineID).Find(&userPermissions).Error
+	if err != nil {
 		return false, http.StatusInternalServerError, "??????"
 	}
-	if err == nil {
+	for _, userPermission := range userPermissions {
 		canView = canView || userPermission.CanView
 		canDownload = canDownload || userPermission.CanDownload
 		canUpload = canUpload || userPermission.CanUpload

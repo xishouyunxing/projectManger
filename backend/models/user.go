@@ -27,8 +27,8 @@ type UserPermission struct {
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-	UserID           uint           `gorm:"not null;index" json:"user_id"`
-	ProductionLineID uint           `gorm:"not null;index" json:"production_line_id"`
+	UserID           uint           `gorm:"not null;index;uniqueIndex:idx_user_line" json:"user_id"`
+	ProductionLineID uint           `gorm:"not null;index;uniqueIndex:idx_user_line" json:"production_line_id"`
 	CanView          bool           `gorm:"default:true" json:"can_view"`      // 查看权限
 	CanDownload      bool           `gorm:"default:false" json:"can_download"` // 下载权限
 	CanUpload        bool           `gorm:"default:false" json:"can_upload"`   // 上传权限

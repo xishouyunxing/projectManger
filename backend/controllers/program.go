@@ -890,7 +890,41 @@ func GetProgramRelations(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, relations)
+	visibleRelations := make([]models.ProgramRelation, 0, len(relations))
+	for _, relation := range relations {
+		visible, statusCode, message := programRelationVisible(c, relation)
+		if statusCode != 0 {
+			c.JSON(statusCode, gin.H{"error": message})
+			return
+		}
+		if visible {
+			visibleRelations = append(visibleRelations, relation)
+		}
+	}
+
+	c.JSON(http.StatusOK, visibleRelations)
+}
+
+func programRelationVisible(c *gin.Context, relation models.ProgramRelation) (bool, int, string) {
+	sourceVisible, statusCode, message := relationProgramVisible(c, relation.SourceProgram)
+	if statusCode != 0 || !sourceVisible {
+		return sourceVisible, statusCode, message
+	}
+	return relationProgramVisible(c, relation.RelatedProgram)
+}
+
+func relationProgramVisible(c *gin.Context, program models.Program) (bool, int, string) {
+	if program.ID == 0 {
+		return false, http.StatusInternalServerError, "????"
+	}
+	allowed, statusCode, message := checkLineAction(c, program.ProductionLineID, lineActionView)
+	if allowed {
+		return true, 0, ""
+	}
+	if statusCode == http.StatusForbidden {
+		return false, 0, ""
+	}
+	return false, statusCode, message
 }
 
 func CreateRelation(c *gin.Context) {
