@@ -3,10 +3,12 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"crane-system/utils"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -516,6 +518,39 @@ type createProgramRequest struct {
 	CustomFieldValues *[]programCustomFieldValueInput `json:"custom_field_values"`
 }
 
+func validateProgramStatus(status string) error {
+	switch status {
+	case "in_progress", "completed":
+		return nil
+	default:
+		return errors.New("invalid program status")
+	}
+}
+
+func validateProgramRelations(tx *gorm.DB, productionLineID uint, vehicleModelID *uint) error {
+	if productionLineID == 0 {
+		return errors.New("invalid production line")
+	}
+	var line models.ProductionLine
+	if err := tx.Select("id").First(&line, productionLineID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("invalid production line")
+		}
+		return err
+	}
+
+	if vehicleModelID != nil && *vehicleModelID > 0 {
+		var vehicleModel models.VehicleModel
+		if err := tx.Select("id").First(&vehicleModel, *vehicleModelID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("invalid vehicle model")
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 func CreateProgram(c *gin.Context) {
 	var req createProgramRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -531,6 +566,14 @@ func CreateProgram(c *gin.Context) {
 	}
 	if req.Status == "" {
 		req.Status = "in_progress"
+	}
+	if err := validateProgramStatus(req.Status); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateProgramRelations(database.DB, req.ProductionLineID, req.VehicleModelID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if !authorizeLineAction(c, req.ProductionLineID, lineActionManage) {
 		return
@@ -660,9 +703,25 @@ func UpdateProgram(c *gin.Context) {
 		return
 	}
 
+	if req.Status != nil {
+		if err := validateProgramStatus(updates["status"].(string)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	nextProductionLineID := originalProductionLineID
 	if req.ProductionLineID != nil {
 		nextProductionLineID = *req.ProductionLineID
+	}
+	var nextVehicleModelID *uint
+	if req.VehicleModelID.Set && req.VehicleModelID.Value != nil && *req.VehicleModelID.Value > 0 {
+		nextVehicleModelID = req.VehicleModelID.Value
+	} else if !req.VehicleModelID.Set && program.VehicleModelID > 0 {
+		nextVehicleModelID = &program.VehicleModelID
+	}
+	if err := validateProgramRelations(database.DB, nextProductionLineID, nextVehicleModelID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if nextProductionLineID != originalProductionLineID {
 		if !authorizeLineAction(c, nextProductionLineID, lineActionManage) {
@@ -715,6 +774,7 @@ func DeleteProgram(c *gin.Context) {
 		return
 	}
 
+	var filesToDelete []string
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		var program models.Program
 		if err := tx.First(&program, programID).Error; err != nil {
@@ -723,7 +783,28 @@ func DeleteProgram(c *gin.Context) {
 		if !authorizeLineAction(c, program.ProductionLineID, lineActionManage) {
 			return errors.New("forbidden")
 		}
+
+		var files []models.ProgramFile
+		if err := tx.Where("program_id = ?", programID).Find(&files).Error; err != nil {
+			return err
+		}
+		for _, file := range files {
+			filesToDelete = append(filesToDelete, file.FilePath)
+		}
+
 		if err := tx.Where("program_id = ?", programID).Delete(&models.ProgramCustomFieldValue{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("program_id = ?", programID).Delete(&models.ProgramVersion{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("program_id = ?", programID).Delete(&models.ProgramFile{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("parent_program_id = ? OR child_program_id = ?", programID, programID).Delete(&models.ProgramMapping{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("source_program_id = ? OR related_program_id = ?", programID, programID).Delete(&models.ProgramRelation{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&program).Error
@@ -738,6 +819,14 @@ func DeleteProgram(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
 		return
+	}
+
+	uploadDir := utils.UploadDir()
+	for _, filePath := range filesToDelete {
+		fullPath := filepath.Join(uploadDir, filePath)
+		if utils.IsSafePath(uploadDir, fullPath) {
+			_ = utils.DeleteFile(fullPath)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "????"})

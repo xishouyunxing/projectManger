@@ -7,20 +7,20 @@ import (
 )
 
 type Program struct {
-	ID               uint           `gorm:"primarykey" json:"id"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
-	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-	Name             string         `gorm:"size:200;not null" json:"name"`            // 程序名称
-	Code             string         `gorm:"size:100;not null" json:"code"`            // 程序编号
-	ProductionLineID uint           `gorm:"not null;index" json:"production_line_id"` // 生产线ID
-	VehicleModelID   uint           `gorm:"index" json:"vehicle_model_id"`            // 车型ID
-	Version          string         `gorm:"size:50" json:"version"`                   // 当前版本
-	Description      string         `gorm:"type:text" json:"description"`             // 描述
-	Status           string         `gorm:"size:20;default:active" json:"status"`     // 状态
+	ID               uint                `gorm:"primarykey" json:"id"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt      `gorm:"index" json:"-"`
+	Name             string              `gorm:"size:200;not null" json:"name"`             // 程序名称
+	Code             string              `gorm:"size:100;not null" json:"code"`             // 程序编号
+	ProductionLineID uint                `gorm:"not null;index" json:"production_line_id"`  // 生产线ID
+	VehicleModelID   uint                `gorm:"index" json:"vehicle_model_id"`             // 车型ID
+	Version          string              `gorm:"size:50" json:"version"`                    // 当前版本
+	Description      string              `gorm:"type:text" json:"description"`              // 描述
+	Status           string              `gorm:"size:20;default:in_progress" json:"status"` // 状态
 	MappingInfo      *ProgramMappingInfo `gorm:"-" json:"mapping_info,omitempty"`
-	OwnVersionCount  int64              `gorm:"-" json:"own_version_count"`
-	OwnFileCount     int64              `gorm:"-" json:"own_file_count"`
+	OwnVersionCount  int64               `gorm:"-" json:"own_version_count"`
+	OwnFileCount     int64               `gorm:"-" json:"own_file_count"`
 
 	// 关联
 	ProductionLine    ProductionLine            `json:"production_line,omitempty"`
@@ -30,10 +30,9 @@ type Program struct {
 	CustomFieldValues []ProgramCustomFieldValue `json:"custom_field_values,omitempty"`
 }
 
-
 type ProgramMappingInfo struct {
-	MappingID        uint   `json:"mapping_id"`
-	ParentProgramID  uint   `json:"parent_program_id"`
+	MappingID         uint   `json:"mapping_id"`
+	ParentProgramID   uint   `json:"parent_program_id"`
 	ParentProgramName string `json:"parent_program_name"`
 	ParentProgramCode string `json:"parent_program_code"`
 }

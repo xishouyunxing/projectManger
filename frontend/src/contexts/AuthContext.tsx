@@ -51,10 +51,19 @@ const getInitialState = () => {
     }
   }
 
-  return {
-    token: storedToken,
-    user: storedUser ? JSON.parse(storedUser) : null,
-  };
+  if (!storedUser) {
+    return { token: storedToken, user: null };
+  }
+
+  try {
+    return { token: storedToken, user: JSON.parse(storedUser) };
+  } catch (error) {
+    console.warn('Invalid cached user data, clearing auth state.', error);
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    localStorage.removeItem('lastActivity');
+    return { user: null, token: null };
+  }
 };
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {

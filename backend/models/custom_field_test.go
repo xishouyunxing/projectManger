@@ -50,7 +50,7 @@ func TestAutoMigrateCustomFieldModels(t *testing.T) {
 		t.Fatalf("expected unique index idx_program_custom_field_values_program_field")
 	}
 
-	line := ProductionLine{Name: "测试产线", Code: "LINE-001", Type: "upper", Status: "active"}
+	line := ProductionLine{Name: "测试产线", Code: "LINE-001", Type: "upper", Status: "in_progress"}
 	if err := db.Create(&line).Error; err != nil {
 		t.Fatalf("create production line: %v", err)
 	}
@@ -67,9 +67,17 @@ func TestAutoMigrateCustomFieldModels(t *testing.T) {
 		t.Fatalf("create custom field: %v", err)
 	}
 
-	program := Program{Name: "程序A", Code: "PROG-001", ProductionLineID: line.ID, Status: "active"}
+	program := Program{Name: "程序A", Code: "PROG-001", ProductionLineID: line.ID, Status: "in_progress"}
 	if err := db.Create(&program).Error; err != nil {
 		t.Fatalf("create program: %v", err)
+	}
+
+	defaultProgram := Program{Name: "Default Status Program", Code: "PROG-DEFAULT", ProductionLineID: line.ID}
+	if err := db.Create(&defaultProgram).Error; err != nil {
+		t.Fatalf("create default status program: %v", err)
+	}
+	if defaultProgram.Status != "in_progress" {
+		t.Fatalf("expected default program status in_progress, got %q", defaultProgram.Status)
 	}
 
 	value := ProgramCustomFieldValue{ProgramID: program.ID, ProductionLineCustomFieldID: field.ID, Value: "试产"}

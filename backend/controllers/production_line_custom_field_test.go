@@ -39,6 +39,7 @@ func openProductionLineCustomFieldTestDB(t *testing.T) *gorm.DB {
 		&models.ProgramFile{},
 		&models.ProgramVersion{},
 		&models.ProgramRelation{},
+		&models.ProgramMapping{},
 		&models.UserPermission{},
 		&models.VehicleModel{},
 	); err != nil {

@@ -3,11 +3,14 @@ package controllers
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"crane-system/config"
 	"crane-system/database"
 	"crane-system/middleware"
 	"crane-system/models"
@@ -420,15 +423,49 @@ func TestSaveProgramCustomFieldValuesValidatesInputTransactionally(t *testing.T)
 	})
 }
 
-func TestDeleteProgramRemovesCustomFieldValues(t *testing.T) {
+func TestDeleteProgramRemovesRelatedDataAndUploadedFiles(t *testing.T) {
 	r, token, line, program := setupProgramCustomFieldValueTest(t)
-	field := models.ProductionLineCustomField{ProductionLineID: line.ID, Name: "备注", FieldType: "text", Enabled: true}
+	originalUploadDir := config.AppConfig.Storage.UploadsDir
+	uploadDir := t.TempDir()
+	config.AppConfig.Storage.UploadsDir = uploadDir
+	t.Cleanup(func() { config.AppConfig.Storage.UploadsDir = originalUploadDir })
+
+	field := models.ProductionLineCustomField{ProductionLineID: line.ID, Name: "??", FieldType: "text", Enabled: true}
 	if err := database.DB.Create(&field).Error; err != nil {
 		t.Fatalf("create field: %v", err)
 	}
-	value := models.ProgramCustomFieldValue{ProgramID: program.ID, ProductionLineCustomFieldID: field.ID, Value: "待删除"}
+	value := models.ProgramCustomFieldValue{ProgramID: program.ID, ProductionLineCustomFieldID: field.ID, Value: "???"}
 	if err := database.DB.Create(&value).Error; err != nil {
 		t.Fatalf("create value: %v", err)
+	}
+
+	relatedProgram := models.Program{Name: "????", Code: "PROG-REL", ProductionLineID: line.ID, Status: "in_progress"}
+	if err := database.DB.Create(&relatedProgram).Error; err != nil {
+		t.Fatalf("create related program: %v", err)
+	}
+	filePath := filepath.Join("programs", "demo.nc")
+	fullFilePath := filepath.Join(uploadDir, filePath)
+	if err := os.MkdirAll(filepath.Dir(fullFilePath), 0755); err != nil {
+		t.Fatalf("create upload dir: %v", err)
+	}
+	if err := os.WriteFile(fullFilePath, []byte("demo"), 0644); err != nil {
+		t.Fatalf("write upload file: %v", err)
+	}
+	file := models.ProgramFile{ProgramID: program.ID, FileName: "demo.nc", FilePath: filePath, FileSize: 4, Version: "v1", UploadedBy: 1}
+	if err := database.DB.Create(&file).Error; err != nil {
+		t.Fatalf("create program file: %v", err)
+	}
+	version := models.ProgramVersion{ProgramID: program.ID, Version: "v1", FileID: file.ID, UploadedBy: 1, IsCurrent: true}
+	if err := database.DB.Create(&version).Error; err != nil {
+		t.Fatalf("create program version: %v", err)
+	}
+	mapping := models.ProgramMapping{ParentProgramID: program.ID, ChildProgramID: relatedProgram.ID, CreatedBy: 1}
+	if err := database.DB.Create(&mapping).Error; err != nil {
+		t.Fatalf("create mapping: %v", err)
+	}
+	relation := models.ProgramRelation{SourceProgramID: program.ID, RelatedProgramID: relatedProgram.ID, RelationType: "same_program"}
+	if err := database.DB.Create(&relation).Error; err != nil {
+		t.Fatalf("create relation: %v", err)
 	}
 
 	resp := performProductionLineCustomFieldRequest(t, r, http.MethodDelete, programDetailPath(program.ID), token, nil)
@@ -436,12 +473,30 @@ func TestDeleteProgramRemovesCustomFieldValues(t *testing.T) {
 		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 
-	var valueCount int64
-	if err := database.DB.Model(&models.ProgramCustomFieldValue{}).Where("program_id = ?", program.ID).Count(&valueCount).Error; err != nil {
-		t.Fatalf("count custom field values: %v", err)
+	countDeletedProgramRows := func(model any, where string, args ...any) int64 {
+		var count int64
+		if err := database.DB.Model(model).Where(where, args...).Count(&count).Error; err != nil {
+			t.Fatalf("count related rows: %v", err)
+		}
+		return count
 	}
-	if valueCount != 0 {
-		t.Fatalf("expected program custom field values to be deleted, count=%d", valueCount)
+	if count := countDeletedProgramRows(&models.ProgramCustomFieldValue{}, "program_id = ?", program.ID); count != 0 {
+		t.Fatalf("expected custom field values deleted, count=%d", count)
+	}
+	if count := countDeletedProgramRows(&models.ProgramFile{}, "program_id = ?", program.ID); count != 0 {
+		t.Fatalf("expected files deleted, count=%d", count)
+	}
+	if count := countDeletedProgramRows(&models.ProgramVersion{}, "program_id = ?", program.ID); count != 0 {
+		t.Fatalf("expected versions deleted, count=%d", count)
+	}
+	if count := countDeletedProgramRows(&models.ProgramMapping{}, "parent_program_id = ? OR child_program_id = ?", program.ID, program.ID); count != 0 {
+		t.Fatalf("expected mappings deleted, count=%d", count)
+	}
+	if count := countDeletedProgramRows(&models.ProgramRelation{}, "source_program_id = ? OR related_program_id = ?", program.ID, program.ID); count != 0 {
+		t.Fatalf("expected relations deleted, count=%d", count)
+	}
+	if _, err := os.Stat(fullFilePath); !os.IsNotExist(err) {
+		t.Fatalf("expected uploaded file to be removed, stat error=%v", err)
 	}
 }
 
@@ -491,6 +546,66 @@ func TestGetProgramIncludesCustomFieldValuesAfterSave(t *testing.T) {
 	}
 }
 
+func TestCreateProgramRejectsInvalidStatusAndRelations(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	invalidStatusResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/programs", token, map[string]any{
+		"name":               "Invalid Status",
+		"code":               "PROG-BAD-STATUS",
+		"production_line_id": line.ID,
+		"status":             "paused",
+	})
+	if invalidStatusResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid status status 400, got %d body=%s", invalidStatusResp.Code, invalidStatusResp.Body.String())
+	}
+
+	invalidLineResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/programs", token, map[string]any{
+		"name":               "Invalid Line",
+		"code":               "PROG-BAD-LINE",
+		"production_line_id": line.ID + 999,
+		"status":             "in_progress",
+	})
+	if invalidLineResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid line status 400, got %d body=%s", invalidLineResp.Code, invalidLineResp.Body.String())
+	}
+
+	invalidVehicleResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/programs", token, map[string]any{
+		"name":               "Invalid Vehicle",
+		"code":               "PROG-BAD-VEHICLE",
+		"production_line_id": line.ID,
+		"vehicle_model_id":   999,
+		"status":             "in_progress",
+	})
+	if invalidVehicleResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid vehicle status 400, got %d body=%s", invalidVehicleResp.Code, invalidVehicleResp.Body.String())
+	}
+}
+
+func TestUpdateProgramRejectsInvalidStatusAndRelations(t *testing.T) {
+	r, token, _, program := setupProgramCustomFieldValueTest(t)
+
+	invalidStatusResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"status": "paused",
+	})
+	if invalidStatusResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid status status 400, got %d body=%s", invalidStatusResp.Code, invalidStatusResp.Body.String())
+	}
+
+	invalidLineResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"production_line_id": program.ProductionLineID + 999,
+	})
+	if invalidLineResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid line status 400, got %d body=%s", invalidLineResp.Code, invalidLineResp.Body.String())
+	}
+
+	invalidVehicleResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, programDetailPath(program.ID), token, map[string]any{
+		"vehicle_model_id": 999,
+	})
+	if invalidVehicleResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid vehicle status 400, got %d body=%s", invalidVehicleResp.Code, invalidVehicleResp.Body.String())
+	}
+}
+
 func TestUpdateProgramRejectsInvalidIDFormat(t *testing.T) {
 	r, token, _, program := setupProgramCustomFieldValueTest(t)
 
@@ -533,7 +648,7 @@ func TestUpdateProgramClearsCustomFieldValuesWhenProductionLineChanges(t *testin
 		"vehicle_model_id":   program.VehicleModelID,
 		"version":            program.Version,
 		"description":        program.Description,
-		"status":             program.Status,
+		"status":             "in_progress",
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected update status 200, got %d body=%s", resp.Code, resp.Body.String())
@@ -629,7 +744,7 @@ func TestCreateProgramAppliesCustomFieldValuesAtomically(t *testing.T) {
 		"name":               "Atomic Create",
 		"code":               "ATOMIC-001",
 		"production_line_id": line.ID,
-		"status":             "active",
+		"status":             "in_progress",
 		"custom_field_values": []map[string]any{
 			{"field_id": foreignField.ID, "value": "invalid"},
 		},
@@ -650,7 +765,7 @@ func TestCreateProgramAppliesCustomFieldValuesAtomically(t *testing.T) {
 		"name":               "Atomic Create",
 		"code":               "ATOMIC-001",
 		"production_line_id": line.ID,
-		"status":             "active",
+		"status":             "in_progress",
 		"custom_field_values": []map[string]any{
 			{"field_id": validField.ID, "value": "ok"},
 		},
@@ -1218,26 +1333,40 @@ func TestGetVehicleModelFiltersProgramsToAuthorizedLines(t *testing.T) {
 }
 
 func TestGetVehicleModelsSelectorScopeIncludesUnassignedModels(t *testing.T) {
-	r, token, lineA, _ := setupVehicleModelPermissionTest(t)
+	r, token, lineA, lineB := setupVehicleModelPermissionTest(t)
 
-	assignedModel := models.VehicleModel{Name: "已绑定车型", Code: "VM-010", Status: "active"}
+	assignedModel := models.VehicleModel{Name: "?????", Code: "VM-010", Status: "active"}
 	if err := database.DB.Create(&assignedModel).Error; err != nil {
 		t.Fatalf("create assigned model: %v", err)
 	}
-	unassignedModel := models.VehicleModel{Name: "待选择车型", Code: "VM-011", Status: "active"}
+	unassignedModel := models.VehicleModel{Name: "?????", Code: "VM-011", Status: "active"}
 	if err := database.DB.Create(&unassignedModel).Error; err != nil {
 		t.Fatalf("create unassigned model: %v", err)
 	}
+	forbiddenModel := models.VehicleModel{Name: "?????", Code: "VM-012", Status: "active"}
+	if err := database.DB.Create(&forbiddenModel).Error; err != nil {
+		t.Fatalf("create forbidden model: %v", err)
+	}
 
 	program := models.Program{
-		Name:             "已有程序",
+		Name:             "????",
 		Code:             "PROG-VM-010",
 		ProductionLineID: lineA.ID,
 		VehicleModelID:   assignedModel.ID,
-		Status:           "active",
+		Status:           "in_progress",
 	}
 	if err := database.DB.Create(&program).Error; err != nil {
 		t.Fatalf("create program: %v", err)
+	}
+	forbiddenProgram := models.Program{
+		Name:             "?????",
+		Code:             "PROG-VM-012",
+		ProductionLineID: lineB.ID,
+		VehicleModelID:   forbiddenModel.ID,
+		Status:           "in_progress",
+	}
+	if err := database.DB.Create(&forbiddenProgram).Error; err != nil {
+		t.Fatalf("create forbidden program: %v", err)
 	}
 
 	defaultResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, vehicleModelListPath(""), token, nil)
@@ -1264,6 +1393,9 @@ func TestGetVehicleModelsSelectorScopeIncludesUnassignedModels(t *testing.T) {
 	}
 	if !vehicleModelIDsContain(selectorPayload, unassignedModel.ID) {
 		t.Fatalf("expected selector list to include unassigned model %d, got %#v", unassignedModel.ID, selectorPayload)
+	}
+	if vehicleModelIDsContain(selectorPayload, forbiddenModel.ID) {
+		t.Fatalf("expected selector list to exclude forbidden model %d, got %#v", forbiddenModel.ID, selectorPayload)
 	}
 }
 
