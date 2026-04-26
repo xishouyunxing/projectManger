@@ -1,374 +1,343 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
-  Table,
   Button,
-  Space,
-  Modal,
-  Form,
-  Select,
-  Switch,
-  message,
-  Typography,
-  Popconfirm,
-  Tabs,
   ConfigProvider,
-  Tooltip,
+  Select,
+  Space,
+  Switch,
+  Tabs,
+  Table,
+  Typography,
+  message,
 } from 'antd';
+import type { TableColumnsType } from 'antd';
 import {
-  PlusOutlined,
-  DeleteOutlined,
+  ApartmentOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  SafetyCertificateOutlined,
   TeamOutlined,
   UserOutlined,
-  EditOutlined,
 } from '@ant-design/icons';
 import api from '../services/api';
 
 const { Title } = Typography;
 
-const PermissionManagement = () => {
-  const [permissions, setPermissions] = useState([]);
-  const [deptPermissions, setDeptPermissions] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [productionLines, setProductionLines] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [deptLoading, setDeptLoading] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [deptModalVisible, setDeptModalVisible] = useState(false);
-  const [currentPermission, setCurrentPermission] = useState<any>(null);
-  const [currentDeptPermission, setCurrentDeptPermission] = useState<any>(null);
-  const [selectedDepartment, setSelectedDepartment] = useState<number | null>(
-    null,
-  );
-  const [form] = Form.useForm();
-  const [deptForm] = Form.useForm();
+type PermissionBit = 'can_view' | 'can_download' | 'can_upload' | 'can_manage';
 
-  useEffect(() => {
-    loadData();
+type PermissionMatrixItem = {
+  production_line_id: number;
+  production_line_name: string;
+  can_view: boolean;
+  can_download: boolean;
+  can_upload: boolean;
+  can_manage: boolean;
+  source?: string;
+};
+
+type User = {
+  id: number;
+  name: string;
+  employee_id?: string;
+  role?: string;
+  department?: { name?: string };
+};
+
+type Department = {
+  id: number;
+  name: string;
+};
+
+type ProductionLine = {
+  id: number;
+  name: string;
+};
+
+const permissionBits: Array<{ key: PermissionBit; label: string }> = [
+  { key: 'can_view', label: '查看' },
+  { key: 'can_download', label: '下载' },
+  { key: 'can_upload', label: '上传' },
+  { key: 'can_manage', label: '管理' },
+];
+
+const sourceLabels: Record<string, string> = {
+  user: '用户',
+  department: '部门',
+  role_default: '角色默认',
+  department_default: '部门默认',
+  none: '无',
+};
+
+const toMatrixPayload = (rows: PermissionMatrixItem[]) => ({
+  permissions: rows.map((row) => ({
+    production_line_id: row.production_line_id,
+    can_view: row.can_view,
+    can_download: row.can_download,
+    can_upload: row.can_upload,
+    can_manage: row.can_manage,
+  })),
+});
+
+const PermissionManagement = () => {
+  const [users, setUsers] = useState<User[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [productionLines, setProductionLines] = useState<ProductionLine[]>([]);
+
+  const [selectedUserID, setSelectedUserID] = useState<number>();
+  const [selectedDepartmentID, setSelectedDepartmentID] = useState<number>();
+  const [selectedRole, setSelectedRole] = useState<string>();
+  const [selectedDefaultDepartmentID, setSelectedDefaultDepartmentID] =
+    useState<number>();
+
+  const [userMatrix, setUserMatrix] = useState<PermissionMatrixItem[]>([]);
+  const [departmentMatrix, setDepartmentMatrix] = useState<
+    PermissionMatrixItem[]
+  >([]);
+  const [roleDefaultMatrix, setRoleDefaultMatrix] = useState<
+    PermissionMatrixItem[]
+  >([]);
+  const [departmentDefaultMatrix, setDepartmentDefaultMatrix] = useState<
+    PermissionMatrixItem[]
+  >([]);
+
+  const [baseLoading, setBaseLoading] = useState(false);
+  const [userLoading, setUserLoading] = useState(false);
+  const [departmentLoading, setDepartmentLoading] = useState(false);
+  const [roleDefaultLoading, setRoleDefaultLoading] = useState(false);
+  const [departmentDefaultLoading, setDepartmentDefaultLoading] =
+    useState(false);
+  const [userSaving, setUserSaving] = useState(false);
+  const [departmentSaving, setDepartmentSaving] = useState(false);
+  const [roleDefaultSaving, setRoleDefaultSaving] = useState(false);
+  const [departmentDefaultSaving, setDepartmentDefaultSaving] = useState(false);
+
+  const roleOptions = useMemo(() => {
+    const roles = users
+      .map((user) => user.role?.trim())
+      .filter((role): role is string => Boolean(role));
+    return Array.from(new Set(['admin', 'user', ...roles]));
+  }, [users]);
+
+  const loadBaseData = useCallback(async () => {
+    setBaseLoading(true);
+    try {
+      const [usersRes, departmentsRes, linesRes] = await Promise.all([
+        api.get('/users'),
+        api.get('/departments'),
+        api.get('/production-lines'),
+      ]);
+
+      const loadedUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
+      const loadedDepartments = Array.isArray(departmentsRes.data)
+        ? departmentsRes.data
+        : [];
+      const loadedLines = Array.isArray(linesRes.data) ? linesRes.data : [];
+
+      setUsers(loadedUsers);
+      setDepartments(loadedDepartments);
+      setProductionLines(loadedLines);
+      setSelectedUserID((current) => current ?? loadedUsers[0]?.id);
+      setSelectedDepartmentID((current) => current ?? loadedDepartments[0]?.id);
+      setSelectedDefaultDepartmentID(
+        (current) => current ?? loadedDepartments[0]?.id,
+      );
+      setSelectedRole((current) => current ?? loadedUsers[0]?.role ?? 'admin');
+    } catch (error) {
+      console.error('Failed to load permission base data:', error);
+      message.error('基础数据加载失败');
+    } finally {
+      setBaseLoading(false);
+    }
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [permissionsRes, usersRes, linesRes, departmentsRes] =
-        await Promise.all([
-          api.get('/permissions'),
-          api.get('/users'),
-          api.get('/production-lines'),
-          api.get('/departments'),
-        ]);
-      setPermissions(permissionsRes.data);
-      setUsers(usersRes.data);
-      setProductionLines(linesRes.data);
-      setDepartments(departmentsRes.data);
-    } catch (error) {
-      console.error('Failed to load data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadDeptPermissions = async (departmentId?: number) => {
-    setDeptLoading(true);
-    try {
-      const url = departmentId
-        ? `/department-permissions?department_id=${departmentId}`
-        : '/department-permissions';
-      const response = await api.get(url);
-      setDeptPermissions(response.data);
-    } catch (error) {
-      console.error('Failed to load department permissions:', error);
-    } finally {
-      setDeptLoading(false);
-    }
-  };
-
-  const handleDepartmentChange = (value: number | null) => {
-    setSelectedDepartment(value);
-    loadDeptPermissions(value || undefined);
-  };
-
-  const handleAdd = () => {
-    setCurrentPermission(null);
-    form.resetFields();
-    form.setFieldsValue({
-      can_view: true,
-      can_download: false,
-      can_upload: false,
-      can_manage: false,
-    });
-    setModalVisible(true);
-  };
-
-  const handleEdit = (record: any) => {
-    setCurrentPermission(record);
-    form.setFieldsValue(record);
-    setModalVisible(true);
-  };
-
-  const handleDelete = async (id: number) => {
-    try {
-      await api.delete(`/permissions/${id}`);
-      message.success('删除成功');
-      loadData();
-    } catch (error) {
-      console.error('Failed to delete:', error);
-    }
-  };
-
-  const handleSubmit = async (values: any) => {
-    try {
-      if (currentPermission) {
-        await api.put(`/permissions/${currentPermission.id}`, values);
-        message.success('更新成功');
-      } else {
-        await api.post('/permissions', values);
-        message.success('创建成功');
+  const loadMatrix = useCallback(
+    async (
+      url: string,
+      setRows: (rows: PermissionMatrixItem[]) => void,
+      setLoading: (loading: boolean) => void,
+    ) => {
+      setLoading(true);
+      try {
+        const response = await api.get(url);
+        setRows(Array.isArray(response.data?.items) ? response.data.items : []);
+      } catch (error) {
+        console.error(`Failed to load permission matrix ${url}:`, error);
+        message.error('权限矩阵加载失败');
+      } finally {
+        setLoading(false);
       }
-      setModalVisible(false);
-      loadData();
-    } catch (error) {
-      console.error('Failed to submit:', error);
-    }
-  };
-
-  const handleDeptAdd = () => {
-    setCurrentDeptPermission(null);
-    deptForm.resetFields();
-    deptForm.setFieldsValue({
-      can_view: true,
-      can_download: false,
-      can_upload: false,
-      can_manage: false,
-    });
-    setDeptModalVisible(true);
-  };
-
-  const handleDeptEdit = (record: any) => {
-    setCurrentDeptPermission(record);
-    deptForm.setFieldsValue(record);
-    setDeptModalVisible(true);
-  };
-
-  const handleDeptDelete = async (id: number) => {
-    try {
-      await api.delete(`/department-permissions/${id}`);
-      message.success('删除成功');
-      loadDeptPermissions(selectedDepartment || undefined);
-    } catch (error) {
-      console.error('Failed to delete:', error);
-    }
-  };
-
-  const handleDeptSubmit = async (values: any) => {
-    try {
-      if (currentDeptPermission) {
-        await api.put(
-          `/department-permissions/${currentDeptPermission.id}`,
-          values,
-        );
-        message.success('更新成功');
-      } else {
-        await api.post('/department-permissions', values);
-        message.success('创建成功');
-      }
-      setDeptModalVisible(false);
-      loadDeptPermissions(selectedDepartment || undefined);
-    } catch (error) {
-      console.error('Failed to submit:', error);
-    }
-  };
-
-  const filteredPermissions = selectedDepartment
-    ? permissions.filter((p: any) => {
-        const user = users.find((u: any) => u.id === p.user_id) as any;
-        return user?.department_id === selectedDepartment;
-      })
-    : permissions;
-
-  const columns = [
-    {
-      title: '用户',
-      dataIndex: ['user', 'name'],
-      key: 'user',
-      render: (text: string, record: any) => (
-        <Space>
-          <UserOutlined style={{ color: '#005BC1' }} />
-          <span style={{ color: '#2D3335', fontSize: '14px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
-            {text}
-          </span>
-          <span style={{ color: '#5A6062', fontSize: '12px' }}>
-            ({record.user.employee_id})
-          </span>
-          {record.user.department && (
-            <div style={{ background: '#EBEEF0', borderRadius: '4px', display: 'inline-block', padding: '2px 8px' }}>
-              <span style={{ color: '#2D3335', fontSize: '11px', fontWeight: 600 }}>
-                {record.user.department.name}
-              </span>
-            </div>
-          )}
-        </Space>
-      ),
     },
+    [],
+  );
+
+  useEffect(() => {
+    loadBaseData();
+  }, [loadBaseData]);
+
+  useEffect(() => {
+    if (selectedUserID) {
+      loadMatrix(
+        `/permissions/user/${selectedUserID}/matrix`,
+        setUserMatrix,
+        setUserLoading,
+      );
+    }
+  }, [loadMatrix, selectedUserID]);
+
+  useEffect(() => {
+    if (selectedDepartmentID) {
+      loadMatrix(
+        `/department-permissions/department/${selectedDepartmentID}/matrix`,
+        setDepartmentMatrix,
+        setDepartmentLoading,
+      );
+    }
+  }, [loadMatrix, selectedDepartmentID]);
+
+  useEffect(() => {
+    if (selectedRole) {
+      loadMatrix(
+        `/permission-defaults/roles/${encodeURIComponent(selectedRole)}/matrix`,
+        setRoleDefaultMatrix,
+        setRoleDefaultLoading,
+      );
+    }
+  }, [loadMatrix, selectedRole]);
+
+  useEffect(() => {
+    if (selectedDefaultDepartmentID) {
+      loadMatrix(
+        `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
+        setDepartmentDefaultMatrix,
+        setDepartmentDefaultLoading,
+      );
+    }
+  }, [loadMatrix, selectedDefaultDepartmentID]);
+
+  const updateMatrixBit = (
+    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
+    productionLineID: number,
+    bit: PermissionBit,
+    checked: boolean,
+  ) => {
+    setRows((rows) =>
+      rows.map((row) =>
+        row.production_line_id === productionLineID
+          ? { ...row, [bit]: checked }
+          : row,
+      ),
+    );
+  };
+
+  const saveMatrix = async (
+    url: string,
+    rows: PermissionMatrixItem[],
+    setSaving: (saving: boolean) => void,
+    reload: () => void,
+  ) => {
+    setSaving(true);
+    try {
+      await api.put(url, toMatrixPayload(rows));
+      message.success('权限矩阵已保存');
+      reload();
+    } catch (error) {
+      console.error(`Failed to save permission matrix ${url}:`, error);
+      message.error('权限矩阵保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const buildColumns = (
+    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
+  ): TableColumnsType<PermissionMatrixItem> => [
     {
       title: '生产线',
-      dataIndex: ['production_line', 'name'],
-      key: 'production_line',
-      render: (text: string) => (
-        <span style={{ color: '#5A6062', fontSize: '14px', fontWeight: 500, fontFamily: 'Inter, sans-serif' }}>
-          {text}
-        </span>
-      ),
+      dataIndex: 'production_line_name',
+      key: 'production_line_name',
+      width: 220,
+      render: (text: string) => <strong>{text}</strong>,
     },
     {
-      title: '查看',
-      dataIndex: 'can_view',
-      key: 'can_view',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
+      title: '来源',
+      dataIndex: 'source',
+      key: 'source',
+      width: 120,
+      render: (source?: string) => sourceLabels[source || 'none'] || source,
     },
-    {
-      title: '下载',
-      dataIndex: 'can_download',
-      key: 'can_download',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
+    ...permissionBits.map((bit) => ({
+      title: bit.label,
+      dataIndex: bit.key,
+      key: bit.key,
+      width: 110,
+      render: (value: boolean, record: PermissionMatrixItem) => (
+        <Switch
+          aria-label={`${record.production_line_name} ${bit.label}`}
+          checked={value}
+          onChange={(checked) =>
+            updateMatrixBit(setRows, record.production_line_id, bit.key, checked)
+          }
+        />
       ),
-    },
-    {
-      title: '上传',
-      dataIndex: 'can_upload',
-      key: 'can_upload',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '管理',
-      dataIndex: 'can_manage',
-      key: 'can_manage',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      align: 'right' as const,
-      render: (_: any, record: any) => (
-        <Space size="small">
-          <Tooltip title="编辑权限">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#5A6062' }} />}
-              onClick={() => handleEdit(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="确定删除?"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Tooltip title="删除权限">
-              <Button
-                type="text"
-                icon={<DeleteOutlined style={{ color: '#A83836' }} />}
-                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }}
-              />
-            </Tooltip>
-          </Popconfirm>
-        </Space>
-      ),
-    },
+    })),
   ];
 
-  const deptColumns = [
-    {
-      title: '部门',
-      dataIndex: ['department', 'name'],
-      key: 'department',
-      render: (text: string) => (
-        <Space>
-          <TeamOutlined style={{ color: '#005BC1' }} />
-          <span style={{ color: '#2D3335', fontSize: '14px', fontWeight: 700, fontFamily: 'Inter, sans-serif' }}>
-            {text}
-          </span>
-        </Space>
-      ),
-    },
-    {
-      title: '生产线',
-      dataIndex: ['production_line', 'name'],
-      key: 'production_line',
-      render: (text: string) => (
-        <span style={{ color: '#5A6062', fontSize: '14px', fontWeight: 500, fontFamily: 'Inter, sans-serif' }}>
-          {text}
+  const renderToolbar = (
+    selector: React.ReactNode,
+    rows: PermissionMatrixItem[],
+    loading: boolean,
+    saving: boolean,
+    onReload: () => void,
+    onSave: () => void,
+  ) => (
+    <Space
+      wrap
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        marginBottom: 16,
+        width: '100%',
+      }}
+    >
+      <Space wrap>
+        {selector}
+        <span style={{ color: '#5A6062' }}>
+          共 {productionLines.length} 条产线
         </span>
-      ),
-    },
-    {
-      title: '查看',
-      dataIndex: 'can_view',
-      key: 'can_view',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '下载',
-      dataIndex: 'can_download',
-      key: 'can_download',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '上传',
-      dataIndex: 'can_upload',
-      key: 'can_upload',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '管理',
-      dataIndex: 'can_manage',
-      key: 'can_manage',
-      render: (value: boolean) => (
-        <Switch checked={value} disabled size="small" />
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      align: 'right' as const,
-      render: (_: any, record: any) => (
-        <Space size="small">
-          <Tooltip title="编辑权限">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#5A6062' }} />}
-              onClick={() => handleDeptEdit(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="确定删除?"
-            onConfirm={() => handleDeptDelete(record.id)}
-          >
-            <Tooltip title="删除权限">
-              <Button
-                type="text"
-                icon={<DeleteOutlined style={{ color: '#A83836' }} />}
-                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }}
-              />
-            </Tooltip>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
+      </Space>
+      <Space>
+        <Button icon={<ReloadOutlined />} onClick={onReload} loading={loading}>
+          重载
+        </Button>
+        <Button
+          type="primary"
+          icon={<SaveOutlined />}
+          onClick={onSave}
+          loading={saving}
+          disabled={rows.length === 0}
+        >
+          保存
+        </Button>
+      </Space>
+    </Space>
+  );
+
+  const renderMatrix = (
+    rows: PermissionMatrixItem[],
+    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
+    loading: boolean,
+  ) => (
+    <Table
+      columns={buildColumns(setRows)}
+      dataSource={rows}
+      rowKey="production_line_id"
+      loading={loading || baseLoading}
+      pagination={false}
+      className="custom-table"
+      scroll={{ x: 760 }}
+    />
+  );
 
   return (
     <div className="management-page">
@@ -376,7 +345,9 @@ const PermissionManagement = () => {
         <div>
           <div className="management-page-breadcrumb">
             <span>系统</span>
-            <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>/</span>
+            <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>
+              /
+            </span>
             <span className="active">权限管理</span>
           </div>
           <Title level={2} className="management-page-title">
@@ -390,232 +361,262 @@ const PermissionManagement = () => {
           components: {
             Select: {
               controlHeight: 36,
-              borderRadius: 8,
-              colorBorder: 'transparent',
-              colorPrimaryHover: 'transparent',
-              controlOutline: 'none',
-            }
-          }
+              borderRadius: 6,
+            },
+          },
         }}
       >
-        <div className="management-filter-panel">
-          <div className="management-filter-field">
-            <div className="management-filter-label">按部门筛选</div>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="全部门"
-              allowClear
-              value={selectedDepartment}
-              onChange={handleDepartmentChange}
-            >
-              {departments.map((dept: any) => (
-                <Select.Option key={dept.id} value={dept.id}>
-                  {dept.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </div>
+        <div className="management-table-card">
+          <Tabs
+            items={[
+              {
+                key: 'user_matrix',
+                label: (
+                  <span>
+                    <UserOutlined />
+                    用户权限矩阵
+                  </span>
+                ),
+                children: (
+                  <>
+                    {renderToolbar(
+                      <Select
+                        aria-label="选择用户"
+                        data-testid="user-matrix-select"
+                        style={{ width: 280 }}
+                        placeholder="选择用户"
+                        value={selectedUserID}
+                        onChange={setSelectedUserID}
+                        options={users.map((user) => ({
+                          value: user.id,
+                          label: `${user.name}${
+                            user.employee_id ? ` (${user.employee_id})` : ''
+                          }${
+                            user.department?.name
+                              ? ` - ${user.department.name}`
+                              : ''
+                          }`,
+                        }))}
+                      />,
+                      userMatrix,
+                      userLoading,
+                      userSaving,
+                      () => {
+                        if (selectedUserID) {
+                          loadMatrix(
+                            `/permissions/user/${selectedUserID}/matrix`,
+                            setUserMatrix,
+                            setUserLoading,
+                          );
+                        }
+                      },
+                      () => {
+                        if (selectedUserID) {
+                          saveMatrix(
+                            `/permissions/user/${selectedUserID}/matrix`,
+                            userMatrix,
+                            setUserSaving,
+                            () =>
+                              loadMatrix(
+                                `/permissions/user/${selectedUserID}/matrix`,
+                                setUserMatrix,
+                                setUserLoading,
+                              ),
+                          );
+                        }
+                      },
+                    )}
+                    {renderMatrix(userMatrix, setUserMatrix, userLoading)}
+                  </>
+                ),
+              },
+              {
+                key: 'department_matrix',
+                label: (
+                  <span>
+                    <TeamOutlined />
+                    部门权限矩阵
+                  </span>
+                ),
+                children: (
+                  <>
+                    {renderToolbar(
+                      <Select
+                        aria-label="选择部门"
+                        data-testid="department-matrix-select"
+                        style={{ width: 260 }}
+                        placeholder="选择部门"
+                        value={selectedDepartmentID}
+                        onChange={setSelectedDepartmentID}
+                        options={departments.map((department) => ({
+                          value: department.id,
+                          label: department.name,
+                        }))}
+                      />,
+                      departmentMatrix,
+                      departmentLoading,
+                      departmentSaving,
+                      () => {
+                        if (selectedDepartmentID) {
+                          loadMatrix(
+                            `/department-permissions/department/${selectedDepartmentID}/matrix`,
+                            setDepartmentMatrix,
+                            setDepartmentLoading,
+                          );
+                        }
+                      },
+                      () => {
+                        if (selectedDepartmentID) {
+                          saveMatrix(
+                            `/department-permissions/department/${selectedDepartmentID}/matrix`,
+                            departmentMatrix,
+                            setDepartmentSaving,
+                            () =>
+                              loadMatrix(
+                                `/department-permissions/department/${selectedDepartmentID}/matrix`,
+                                setDepartmentMatrix,
+                                setDepartmentLoading,
+                              ),
+                          );
+                        }
+                      },
+                    )}
+                    {renderMatrix(
+                      departmentMatrix,
+                      setDepartmentMatrix,
+                      departmentLoading,
+                    )}
+                  </>
+                ),
+              },
+              {
+                key: 'role_defaults',
+                label: (
+                  <span>
+                    <SafetyCertificateOutlined />
+                    角色默认权限
+                  </span>
+                ),
+                children: (
+                  <>
+                    {renderToolbar(
+                      <Select
+                        aria-label="选择角色"
+                        data-testid="role-default-select"
+                        style={{ width: 220 }}
+                        placeholder="选择角色"
+                        value={selectedRole}
+                        onChange={setSelectedRole}
+                        options={roleOptions.map((role) => ({
+                          value: role,
+                          label: role,
+                        }))}
+                      />,
+                      roleDefaultMatrix,
+                      roleDefaultLoading,
+                      roleDefaultSaving,
+                      () => {
+                        if (selectedRole) {
+                          loadMatrix(
+                            `/permission-defaults/roles/${encodeURIComponent(
+                              selectedRole,
+                            )}/matrix`,
+                            setRoleDefaultMatrix,
+                            setRoleDefaultLoading,
+                          );
+                        }
+                      },
+                      () => {
+                        if (selectedRole) {
+                          saveMatrix(
+                            `/permission-defaults/roles/${encodeURIComponent(
+                              selectedRole,
+                            )}/matrix`,
+                            roleDefaultMatrix,
+                            setRoleDefaultSaving,
+                            () =>
+                              loadMatrix(
+                                `/permission-defaults/roles/${encodeURIComponent(
+                                  selectedRole,
+                                )}/matrix`,
+                                setRoleDefaultMatrix,
+                                setRoleDefaultLoading,
+                              ),
+                          );
+                        }
+                      },
+                    )}
+                    {renderMatrix(
+                      roleDefaultMatrix,
+                      setRoleDefaultMatrix,
+                      roleDefaultLoading,
+                    )}
+                  </>
+                ),
+              },
+              {
+                key: 'department_defaults',
+                label: (
+                  <span>
+                    <ApartmentOutlined />
+                    部门默认权限
+                  </span>
+                ),
+                children: (
+                  <>
+                    {renderToolbar(
+                      <Select
+                        aria-label="选择默认部门"
+                        data-testid="department-default-select"
+                        style={{ width: 260 }}
+                        placeholder="选择部门"
+                        value={selectedDefaultDepartmentID}
+                        onChange={setSelectedDefaultDepartmentID}
+                        options={departments.map((department) => ({
+                          value: department.id,
+                          label: department.name,
+                        }))}
+                      />,
+                      departmentDefaultMatrix,
+                      departmentDefaultLoading,
+                      departmentDefaultSaving,
+                      () => {
+                        if (selectedDefaultDepartmentID) {
+                          loadMatrix(
+                            `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
+                            setDepartmentDefaultMatrix,
+                            setDepartmentDefaultLoading,
+                          );
+                        }
+                      },
+                      () => {
+                        if (selectedDefaultDepartmentID) {
+                          saveMatrix(
+                            `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
+                            departmentDefaultMatrix,
+                            setDepartmentDefaultSaving,
+                            () =>
+                              loadMatrix(
+                                `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
+                                setDepartmentDefaultMatrix,
+                                setDepartmentDefaultLoading,
+                              ),
+                          );
+                        }
+                      },
+                    )}
+                    {renderMatrix(
+                      departmentDefaultMatrix,
+                      setDepartmentDefaultMatrix,
+                      departmentDefaultLoading,
+                    )}
+                  </>
+                ),
+              },
+            ]}
+          />
         </div>
       </ConfigProvider>
-
-      <Tabs
-        items={[
-          {
-            key: 'user',
-            label: (
-              <span>
-                <UserOutlined />
-                用户权限
-              </span>
-            ),
-            children: (
-              <>
-                <div
-                  style={{
-                    marginBottom: 16,
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                  }}
-                >
-                  <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={handleAdd}
-                  >
-                    新建用户权限
-                  </Button>
-                </div>
-                <div className="management-table-card">
-                  <Table
-                  columns={columns}
-                  dataSource={filteredPermissions}
-                  rowKey="id"
-                  loading={loading}
-                  className="custom-table"
-                />
-                </div>
-              </>
-            ),
-          },
-          {
-            key: 'department',
-            label: (
-              <span>
-                <TeamOutlined />
-                部门权限
-              </span>
-            ),
-            children: (
-              <>
-                <div
-                  style={{
-                    marginBottom: 16,
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                  }}
-                >
-                  <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={handleDeptAdd}
-                  >
-                    新建部门权限
-                  </Button>
-                </div>
-                <div className="management-table-card">
-                  <Table
-                  columns={deptColumns}
-                  dataSource={deptPermissions}
-                  rowKey="id"
-                  loading={deptLoading}
-                  className="custom-table"
-                />
-                </div>
-              </>
-            ),
-          },
-        ]}
-        onChange={(key) => {
-          if (key === 'department') {
-            loadDeptPermissions(selectedDepartment || undefined);
-          }
-        }}
-      />
-
-      {/* 用户权限模态框 */}
-      <Modal
-        title={currentPermission ? '编辑用户权限' : '新建用户权限'}
-        open={modalVisible}
-        onCancel={() => setModalVisible(false)}
-        onOk={() => form.submit()}
-      >
-        <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Form.Item
-            name="user_id"
-            label="用户"
-            rules={[{ required: true, message: '请选择用户' }]}
-          >
-            <Select
-              showSearch
-              optionFilterProp="children"
-              disabled={!!currentPermission}
-              placeholder="请选择用户"
-            >
-              {users.map((user: any) => (
-                <Select.Option key={user.id} value={user.id}>
-                  {user.name} ({user.employee_id}) -{' '}
-                  {user.department?.name || '无部门'}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item
-            name="production_line_id"
-            label="生产线"
-            rules={[{ required: true, message: '请选择生产线' }]}
-          >
-            <Select disabled={!!currentPermission} placeholder="请选择生产线">
-              {productionLines.map((line: any) => (
-                <Select.Option key={line.id} value={line.id}>
-                  {line.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item name="can_view" label="查看权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name="can_download"
-            label="下载权限"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item name="can_upload" label="上传权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="can_manage" label="管理权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* 部门权限模态框 */}
-      <Modal
-        title={currentDeptPermission ? '编辑部门权限' : '新建部门权限'}
-        open={deptModalVisible}
-        onCancel={() => setDeptModalVisible(false)}
-        onOk={() => deptForm.submit()}
-      >
-        <Form form={deptForm} layout="vertical" onFinish={handleDeptSubmit}>
-          <Form.Item
-            name="department_id"
-            label="部门"
-            rules={[{ required: true, message: '请选择部门' }]}
-          >
-            <Select disabled={!!currentDeptPermission} placeholder="请选择部门">
-              {departments.map((dept: any) => (
-                <Select.Option key={dept.id} value={dept.id}>
-                  {dept.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item
-            name="production_line_id"
-            label="生产线"
-            rules={[{ required: true, message: '请选择生产线' }]}
-          >
-            <Select
-              disabled={!!currentDeptPermission}
-              placeholder="请选择生产线"
-            >
-              {productionLines.map((line: any) => (
-                <Select.Option key={line.id} value={line.id}>
-                  {line.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item name="can_view" label="查看权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name="can_download"
-            label="下载权限"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item name="can_upload" label="上传权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="can_manage" label="管理权限" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 };
