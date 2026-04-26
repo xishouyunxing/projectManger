@@ -80,6 +80,7 @@ const ProgramManagement = () => {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const selectedProgramId = Number(searchParams.get('id') || 0);
+  const initialSearchKeyword = searchParams.get('keyword') || '';
 
   const [modalVisible, setModalVisible] = useState(false);
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
@@ -106,7 +107,8 @@ const ProgramManagement = () => {
     null,
   );
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
-  const [searchKeyword, setSearchKeyword] = useState('');
+  const [searchInputValue, setSearchInputValue] = useState(initialSearchKeyword);
+  const [searchKeyword, setSearchKeyword] = useState(initialSearchKeyword);
   const [filterDateRange, setFilterDateRange] = useState<
     [string | null, string | null]
   >([null, null]);
@@ -178,10 +180,16 @@ const ProgramManagement = () => {
     setFilterProductionLine(null);
     setFilterVehicleModel(null);
     setFilterStatus(null);
+    setSearchInputValue('');
     setSearchKeyword('');
     setFilterDateRange([null, null]);
     setCustomFieldFilters([]);
     setCustomFieldFilterValues({});
+  };
+
+  const applySearchKeyword = () => {
+    setProgramPage(1);
+    setSearchKeyword(searchInputValue.trim());
   };
 
   const availableMappingCandidatePrograms = mappingCandidatePrograms
@@ -223,6 +231,17 @@ const ProgramManagement = () => {
       };
     });
   };
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setProgramPage(1);
+      setSearchKeyword(searchInputValue.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchInputValue]);
 
   useEffect(() => {
     if (!addRelationModalVisible || !currentProgram) {
@@ -440,9 +459,9 @@ const ProgramManagement = () => {
 
   useEffect(() => {
     const keyword = searchParams.get('keyword');
-    if (keyword) {
-      setSearchKeyword(keyword);
-    }
+    const nextKeyword = keyword || '';
+    setSearchInputValue(nextKeyword);
+    setSearchKeyword(nextKeyword);
   }, [searchParams]);
 
   useEffect(() => {
@@ -1287,7 +1306,7 @@ const ProgramManagement = () => {
 
       {/* 筛选区域 */}
       <ProgramFilterPanel
-        searchKeyword={searchKeyword}
+        searchKeyword={searchInputValue}
         filterProductionLine={filterProductionLine}
         filterVehicleModel={filterVehicleModel}
         filterStatus={filterStatus}
@@ -1297,8 +1316,9 @@ const ProgramManagement = () => {
         customFieldFilterValues={customFieldFilterValues}
         onSearchKeywordChange={(value) => {
           setProgramPage(1);
-          setSearchKeyword(value);
+          setSearchInputValue(value);
         }}
+        onApplySearch={applySearchKeyword}
         onFilterProductionLineChange={handleFilterProductionLineChange}
         onFilterVehicleModelChange={(value) => {
           setProgramPage(1);

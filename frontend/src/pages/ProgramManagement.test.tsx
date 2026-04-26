@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import ProgramManagement from './ProgramManagement'
@@ -140,12 +140,20 @@ const singleVersionFixture = [
   },
 ]
 
-const renderPage = () =>
+const renderPage = (initialEntry = '/programs?keyword=Alpha&id=101') =>
   render(
-    <MemoryRouter initialEntries={['/programs?keyword=Alpha&id=101']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <ProgramManagement />
     </MemoryRouter>
   )
+
+const programListCalls = () =>
+  mockApiGet.mock.calls.filter(([url]) => url === '/programs')
+
+const waitForDebounce = () =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, 350)
+  })
 
 const getOverlay = async () => {
   const overlay = await screen.findByTestId('program-management-overlay')
@@ -203,6 +211,10 @@ describe('ProgramManagement unified editor overlay', () => {
     mockApiDelete.mockResolvedValue({ data: {} })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('renders the management page list with custom field tips', async () => {
     renderPage()
 
@@ -211,6 +223,47 @@ describe('ProgramManagement unified editor overlay', () => {
     expect(await screen.findByText('Program Alpha')).toBeInTheDocument()
     expect(await screen.findByText('Saved note')).toBeInTheDocument()
     expect(await screen.findByText('Night')).toBeInTheDocument()
+  })
+
+  it('debounces program keyword search before applying it to the list query', async () => {
+    renderPage('/programs')
+
+    await screen.findByText('Program Alpha')
+    const initialListCallCount = programListCalls().length
+    const searchInput = screen.getByPlaceholderText('搜索参数...') as HTMLInputElement
+
+    fireEvent.change(searchInput, { target: { value: 'Bravo' } })
+
+    expect(
+      programListCalls().some(([, config]) => config?.params?.keyword === 'Bravo'),
+    ).toBe(false)
+
+    await waitForDebounce()
+
+    await waitFor(() => {
+      expect(programListCalls().length).toBeGreaterThan(initialListCallCount)
+      expect(
+        programListCalls().some(([, config]) => config?.params?.keyword === 'Bravo'),
+      ).toBe(true)
+    })
+  })
+
+  it('applies the current keyword immediately when clicking query', async () => {
+    renderPage('/programs')
+
+    await screen.findByText('Program Alpha')
+    const initialListCallCount = programListCalls().length
+    const searchInput = screen.getByPlaceholderText('搜索参数...') as HTMLInputElement
+
+    fireEvent.change(searchInput, { target: { value: 'PA-01' } })
+    fireEvent.click(screen.getByRole('button', { name: /查\s*询/ }))
+
+    await waitFor(() => {
+      expect(programListCalls().length).toBeGreaterThan(initialListCallCount)
+      expect(
+        programListCalls().some(([, config]) => config?.params?.keyword === 'PA-01'),
+      ).toBe(true)
+    })
   })
 
   it('opens the unified editor overlay and loads version, file, and adaptive property sections', async () => {
@@ -275,14 +328,11 @@ describe('ProgramManagement unified editor overlay', () => {
         vehicle_model_id: 10,
         status: 'in_progress',
         description: 'Existing program',
+        custom_field_values: [
+          { field_id: 11, value: 'Saved note' },
+          { field_id: 12, value: 'Night' },
+        ],
       })
-    })
-
-    expect(mockApiPut).toHaveBeenCalledWith('/programs/101/custom-field-values', {
-      values: [
-        { field_id: 11, value: 'Saved note' },
-        { field_id: 12, value: 'Night' },
-      ]
     })
   })
 
@@ -324,14 +374,11 @@ describe('ProgramManagement unified editor overlay', () => {
         vehicle_model_id: 10,
         status: 'in_progress',
         description: 'Existing program',
+        custom_field_values: [
+          { field_id: 11, value: 'Updated note' },
+          { field_id: 12, value: 'Night' },
+        ],
       })
-    })
-
-    expect(mockApiPut).toHaveBeenCalledWith('/programs/101/custom-field-values', {
-      values: [
-        { field_id: 11, value: 'Updated note' },
-        { field_id: 12, value: 'Night' },
-      ]
     })
 
     await waitFor(() => {

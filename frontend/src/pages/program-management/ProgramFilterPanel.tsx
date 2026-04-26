@@ -16,6 +16,7 @@ interface ProgramFilterPanelProps {
   customFieldFilters: ProgramCustomFieldDefinition[];
   customFieldFilterValues: Record<string, string>;
   onSearchKeywordChange: (value: string) => void;
+  onApplySearch: () => void;
   onFilterProductionLineChange: (value?: number) => void;
   onFilterVehicleModelChange: (value?: number) => void;
   onFilterStatusChange: (value?: string) => void;
@@ -34,6 +35,7 @@ const ProgramFilterPanel = ({
   customFieldFilters,
   customFieldFilterValues,
   onSearchKeywordChange,
+  onApplySearch,
   onFilterProductionLineChange,
   onFilterVehicleModelChange,
   onFilterStatusChange,
@@ -77,6 +79,8 @@ const ProgramFilterPanel = ({
             placeholder="搜索参数..."
             value={searchKeyword}
             onChange={(e) => onSearchKeywordChange(e.target.value)}
+            onPressEnter={onApplySearch}
+            allowClear
           />
         </div>
         <div className="management-filter-field">
@@ -135,7 +139,7 @@ const ProgramFilterPanel = ({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Button
-            onClick={() => {}}
+            onClick={onApplySearch}
             style={{
               height: '40px',
               width: '104px',
