@@ -45,6 +45,8 @@ func migrationModels() []any {
 		&models.ProgramMapping{},
 		&models.UserPermission{},
 		&models.DepartmentPermission{},
+		&models.RoleDefaultPermission{},
+		&models.DepartmentDefaultPermission{},
 	}
 }
 

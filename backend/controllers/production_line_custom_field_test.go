@@ -43,6 +43,8 @@ func openProductionLineCustomFieldTestDB(t *testing.T) *gorm.DB {
 		&models.ProgramMapping{},
 		&models.UserPermission{},
 		&models.DepartmentPermission{},
+		&models.RoleDefaultPermission{},
+		&models.DepartmentDefaultPermission{},
 		&models.VehicleModel{},
 	); err != nil {
 		t.Fatalf("auto migrate test db: %v", err)

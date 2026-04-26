@@ -103,6 +103,8 @@ func SetupRouter() *gin.Engine {
 			permissions.POST("", middleware.AdminMiddleware(), controllers.CreatePermission)
 			permissions.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdatePermission)
 			permissions.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeletePermission)
+			permissions.GET("/user/:user_id/matrix", middleware.AdminMiddleware(), controllers.GetUserPermissionMatrix)
+			permissions.PUT("/user/:user_id/matrix", middleware.AdminMiddleware(), controllers.SaveUserPermissionMatrix)
 			permissions.GET("/user/:user_id", controllers.GetUserPermissions)
 			permissions.GET("/user/:user_id/effective", controllers.GetUserEffectivePermissions)
 		}
@@ -114,6 +116,17 @@ func SetupRouter() *gin.Engine {
 			deptPermissions.POST("", controllers.CreateDepartmentPermission)
 			deptPermissions.PUT("/:id", controllers.UpdateDepartmentPermission)
 			deptPermissions.DELETE("/:id", controllers.DeleteDepartmentPermission)
+			deptPermissions.GET("/department/:department_id/matrix", controllers.GetDepartmentPermissionMatrix)
+			deptPermissions.PUT("/department/:department_id/matrix", controllers.SaveDepartmentPermissionMatrix)
+		}
+
+		permissionDefaults := protected.Group("/permission-defaults")
+		permissionDefaults.Use(middleware.AdminMiddleware())
+		{
+			permissionDefaults.GET("/roles/:role/matrix", controllers.GetRoleDefaultPermissionMatrix)
+			permissionDefaults.PUT("/roles/:role/matrix", controllers.SaveRoleDefaultPermissionMatrix)
+			permissionDefaults.GET("/departments/:department_id/matrix", controllers.GetDepartmentDefaultPermissionMatrix)
+			permissionDefaults.PUT("/departments/:department_id/matrix", controllers.SaveDepartmentDefaultPermissionMatrix)
 		}
 
 		versions := protected.Group("/versions")

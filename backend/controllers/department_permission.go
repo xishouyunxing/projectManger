@@ -194,28 +194,6 @@ func GetUserEffectivePermissions(c *gin.Context) {
 		return
 	}
 
-	var userPermissions []models.UserPermission
-	database.DB.Where("user_id = ?", targetID).Find(&userPermissions)
-	userPermMap := make(map[uint]models.UserPermission)
-	for _, perm := range userPermissions {
-		existing := userPermMap[perm.ProductionLineID]
-		existing.ProductionLineID = perm.ProductionLineID
-		existing.CanView = existing.CanView || perm.CanView
-		existing.CanDownload = existing.CanDownload || perm.CanDownload
-		existing.CanUpload = existing.CanUpload || perm.CanUpload
-		existing.CanManage = existing.CanManage || perm.CanManage
-		userPermMap[perm.ProductionLineID] = existing
-	}
-
-	var deptPermissions []models.DepartmentPermission
-	if user.DepartmentID != nil {
-		database.DB.Where("department_id = ?", *user.DepartmentID).Find(&deptPermissions)
-	}
-	deptPermMap := make(map[uint]models.DepartmentPermission)
-	for _, perm := range deptPermissions {
-		deptPermMap[perm.ProductionLineID] = perm
-	}
-
 	type EffectivePermission struct {
 		ProductionLineID   uint   `json:"production_line_id"`
 		ProductionLineName string `json:"production_line_name"`
@@ -226,39 +204,27 @@ func GetUserEffectivePermissions(c *gin.Context) {
 		Source             string `json:"source"`
 	}
 
+	resolvedPermissions, err := resolveUserLinePermissions(user, productionLines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
 	var effectivePermissions []EffectivePermission
+	lineNames := make(map[uint]string, len(productionLines))
 	for _, line := range productionLines {
-		userPerm, hasUserPerm := userPermMap[line.ID]
-		deptPerm, hasDeptPerm := deptPermMap[line.ID]
-
-		ep := EffectivePermission{
-			ProductionLineID:   line.ID,
-			ProductionLineName: line.Name,
-		}
-
-		if hasUserPerm && hasDeptPerm {
-			ep.CanView = userPerm.CanView || deptPerm.CanView
-			ep.CanDownload = userPerm.CanDownload || deptPerm.CanDownload
-			ep.CanUpload = userPerm.CanUpload || deptPerm.CanUpload
-			ep.CanManage = userPerm.CanManage || deptPerm.CanManage
-			ep.Source = "both"
-		} else if hasUserPerm {
-			ep.CanView = userPerm.CanView
-			ep.CanDownload = userPerm.CanDownload
-			ep.CanUpload = userPerm.CanUpload
-			ep.CanManage = userPerm.CanManage
-			ep.Source = "user"
-		} else if hasDeptPerm {
-			ep.CanView = deptPerm.CanView
-			ep.CanDownload = deptPerm.CanDownload
-			ep.CanUpload = deptPerm.CanUpload
-			ep.CanManage = deptPerm.CanManage
-			ep.Source = "department"
-		} else {
-			ep.Source = "none"
-		}
-
-		effectivePermissions = append(effectivePermissions, ep)
+		lineNames[line.ID] = line.Name
+	}
+	for _, permission := range resolvedPermissions {
+		effectivePermissions = append(effectivePermissions, EffectivePermission{
+			ProductionLineID:   permission.ProductionLineID,
+			ProductionLineName: lineNames[permission.ProductionLineID],
+			CanView:            permission.CanView,
+			CanDownload:        permission.CanDownload,
+			CanUpload:          permission.CanUpload,
+			CanManage:          permission.CanManage,
+			Source:             permission.Source,
+		})
 	}
 
 	c.JSON(http.StatusOK, effectivePermissions)

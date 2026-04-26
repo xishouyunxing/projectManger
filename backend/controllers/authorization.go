@@ -4,6 +4,7 @@ import (
 	"crane-system/database"
 	"crane-system/models"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -17,6 +18,15 @@ const (
 	lineActionUpload   linePermissionAction = "upload"
 	lineActionManage   linePermissionAction = "manage"
 )
+
+type resolvedLinePermission struct {
+	ProductionLineID uint
+	CanView          bool
+	CanDownload      bool
+	CanUpload        bool
+	CanManage        bool
+	Source           string
+}
 
 func authorizeOwnerOrAdmin(c *gin.Context, targetUserID uint) bool {
 	roleValue, roleExists := c.Get("user_role")
@@ -74,42 +84,16 @@ func checkLineAction(c *gin.Context, productionLineID uint, action linePermissio
 	}
 
 	var user models.User
-	if err := database.DB.Select("id", "department_id").First(&user, userID).Error; err != nil {
+	if err := database.DB.Select("id", "department_id", "role").First(&user, userID).Error; err != nil {
 		return false, http.StatusUnauthorized, "?????"
 	}
 
-	canView := false
-	canDownload := false
-	canUpload := false
-	canManage := false
-
-	var userPermissions []models.UserPermission
-	err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, productionLineID).Find(&userPermissions).Error
+	permission, err := resolveUserLinePermission(user, productionLineID)
 	if err != nil {
 		return false, http.StatusInternalServerError, "??????"
 	}
-	for _, userPermission := range userPermissions {
-		canView = canView || userPermission.CanView
-		canDownload = canDownload || userPermission.CanDownload
-		canUpload = canUpload || userPermission.CanUpload
-		canManage = canManage || userPermission.CanManage
-	}
 
-	if user.DepartmentID != nil {
-		var departmentPermission models.DepartmentPermission
-		err = database.DB.Where("department_id = ? AND production_line_id = ?", *user.DepartmentID, productionLineID).First(&departmentPermission).Error
-		if err != nil && err != gorm.ErrRecordNotFound {
-			return false, http.StatusInternalServerError, "??????"
-		}
-		if err == nil {
-			canView = canView || departmentPermission.CanView
-			canDownload = canDownload || departmentPermission.CanDownload
-			canUpload = canUpload || departmentPermission.CanUpload
-			canManage = canManage || departmentPermission.CanManage
-		}
-	}
-
-	allowed := permissionAllowsAction(canView, canDownload, canUpload, canManage, action)
+	allowed := permissionAllowsAction(permission.CanView, permission.CanDownload, permission.CanUpload, permission.CanManage, action)
 	if !allowed {
 		return false, http.StatusForbidden, "???"
 	}
@@ -135,41 +119,131 @@ func resolveAuthorizedLineIDs(c *gin.Context, action linePermissionAction) (map[
 	}
 
 	var user models.User
-	if err := database.DB.Select("id", "department_id").First(&user, userID).Error; err != nil {
+	if err := database.DB.Select("id", "department_id", "role").First(&user, userID).Error; err != nil {
 		return nil, http.StatusUnauthorized, "?????"
 	}
 
-	allowedLineIDs := map[uint]struct{}{}
-
-	var userPermissions []models.UserPermission
-	if err := database.DB.
-		Select("production_line_id", "can_view", "can_download", "can_upload", "can_manage").
-		Where("user_id = ?", user.ID).
-		Find(&userPermissions).Error; err != nil {
+	var productionLines []models.ProductionLine
+	if err := database.DB.Select("id").Find(&productionLines).Error; err != nil {
 		return nil, http.StatusInternalServerError, "??????"
 	}
-	for _, permission := range userPermissions {
+	permissions, err := resolveUserLinePermissions(user, productionLines)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "??????"
+	}
+
+	allowedLineIDs := map[uint]struct{}{}
+	for _, permission := range permissions {
 		if permissionAllowsAction(permission.CanView, permission.CanDownload, permission.CanUpload, permission.CanManage, action) {
 			allowedLineIDs[permission.ProductionLineID] = struct{}{}
 		}
 	}
 
+	return allowedLineIDs, 0, ""
+}
+
+func resolveUserLinePermission(user models.User, productionLineID uint) (resolvedLinePermission, error) {
+	permissions, err := resolveUserLinePermissions(user, []models.ProductionLine{{ID: productionLineID}})
+	if err != nil {
+		return resolvedLinePermission{}, err
+	}
+	if len(permissions) == 0 {
+		return resolvedLinePermission{ProductionLineID: productionLineID, Source: "none"}, nil
+	}
+	return permissions[0], nil
+}
+
+func resolveUserLinePermissions(user models.User, productionLines []models.ProductionLine) ([]resolvedLinePermission, error) {
+	lineIDs := make([]uint, 0, len(productionLines))
+	for _, line := range productionLines {
+		lineIDs = append(lineIDs, line.ID)
+	}
+	if len(lineIDs) == 0 {
+		return []resolvedLinePermission{}, nil
+	}
+
+	userPerms := []models.UserPermission{}
+	if err := database.DB.
+		Where("user_id = ? AND production_line_id IN ?", user.ID, lineIDs).
+		Find(&userPerms).Error; err != nil {
+		return nil, err
+	}
+	userPermMap := make(map[uint]models.UserPermission, len(userPerms))
+	for _, perm := range userPerms {
+		userPermMap[perm.ProductionLineID] = perm
+	}
+
+	deptPermMap := map[uint]models.DepartmentPermission{}
 	if user.DepartmentID != nil {
-		var departmentPermissions []models.DepartmentPermission
+		deptPerms := []models.DepartmentPermission{}
 		if err := database.DB.
-			Select("production_line_id", "can_view", "can_download", "can_upload", "can_manage").
-			Where("department_id = ?", *user.DepartmentID).
-			Find(&departmentPermissions).Error; err != nil {
-			return nil, http.StatusInternalServerError, "??????"
+			Where("department_id = ? AND production_line_id IN ?", *user.DepartmentID, lineIDs).
+			Find(&deptPerms).Error; err != nil {
+			return nil, err
 		}
-		for _, permission := range departmentPermissions {
-			if permissionAllowsAction(permission.CanView, permission.CanDownload, permission.CanUpload, permission.CanManage, action) {
-				allowedLineIDs[permission.ProductionLineID] = struct{}{}
-			}
+		for _, perm := range deptPerms {
+			deptPermMap[perm.ProductionLineID] = perm
 		}
 	}
 
-	return allowedLineIDs, 0, ""
+	roleDefaultMap := map[uint]models.RoleDefaultPermission{}
+	if role := strings.TrimSpace(user.Role); role != "" {
+		roleDefaults := []models.RoleDefaultPermission{}
+		if err := database.DB.
+			Where("role = ? AND production_line_id IN ?", role, lineIDs).
+			Find(&roleDefaults).Error; err != nil {
+			return nil, err
+		}
+		for _, perm := range roleDefaults {
+			roleDefaultMap[perm.ProductionLineID] = perm
+		}
+	}
+
+	deptDefaultMap := map[uint]models.DepartmentDefaultPermission{}
+	if user.DepartmentID != nil {
+		deptDefaults := []models.DepartmentDefaultPermission{}
+		if err := database.DB.
+			Where("department_id = ? AND production_line_id IN ?", *user.DepartmentID, lineIDs).
+			Find(&deptDefaults).Error; err != nil {
+			return nil, err
+		}
+		for _, perm := range deptDefaults {
+			deptDefaultMap[perm.ProductionLineID] = perm
+		}
+	}
+
+	resolved := make([]resolvedLinePermission, 0, len(productionLines))
+	for _, line := range productionLines {
+		permission := resolvedLinePermission{ProductionLineID: line.ID, Source: "none"}
+		if perm, ok := userPermMap[line.ID]; ok {
+			permission.CanView = perm.CanView
+			permission.CanDownload = perm.CanDownload
+			permission.CanUpload = perm.CanUpload
+			permission.CanManage = perm.CanManage
+			permission.Source = "user"
+		} else if perm, ok := deptPermMap[line.ID]; ok {
+			permission.CanView = perm.CanView
+			permission.CanDownload = perm.CanDownload
+			permission.CanUpload = perm.CanUpload
+			permission.CanManage = perm.CanManage
+			permission.Source = "department"
+		} else if perm, ok := roleDefaultMap[line.ID]; ok {
+			permission.CanView = perm.CanView
+			permission.CanDownload = perm.CanDownload
+			permission.CanUpload = perm.CanUpload
+			permission.CanManage = perm.CanManage
+			permission.Source = "role_default"
+		} else if perm, ok := deptDefaultMap[line.ID]; ok {
+			permission.CanView = perm.CanView
+			permission.CanDownload = perm.CanDownload
+			permission.CanUpload = perm.CanUpload
+			permission.CanManage = perm.CanManage
+			permission.Source = "department_default"
+		}
+		resolved = append(resolved, permission)
+	}
+
+	return resolved, nil
 }
 
 func permissionAllowsAction(canView, canDownload, canUpload, canManage bool, action linePermissionAction) bool {

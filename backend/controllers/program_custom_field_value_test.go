@@ -83,12 +83,24 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 		permissions := api.Group("/permissions")
 		{
 			permissions.POST("", middleware.AdminMiddleware(), CreatePermission)
+			permissions.GET("/user/:user_id/matrix", middleware.AdminMiddleware(), GetUserPermissionMatrix)
+			permissions.PUT("/user/:user_id/matrix", middleware.AdminMiddleware(), SaveUserPermissionMatrix)
 			permissions.GET("/user/:user_id", GetUserPermissions)
 		}
 		effectivePermissions := api.Group("/department-permissions")
 		{
 			effectivePermissions.POST("", middleware.AdminMiddleware(), CreateDepartmentPermission)
+			effectivePermissions.GET("/department/:department_id/matrix", middleware.AdminMiddleware(), GetDepartmentPermissionMatrix)
+			effectivePermissions.PUT("/department/:department_id/matrix", middleware.AdminMiddleware(), SaveDepartmentPermissionMatrix)
 			effectivePermissions.GET("/user/:user_id/effective", GetUserEffectivePermissions)
+		}
+		permissionDefaults := api.Group("/permission-defaults")
+		permissionDefaults.Use(middleware.AdminMiddleware())
+		{
+			permissionDefaults.GET("/roles/:role/matrix", GetRoleDefaultPermissionMatrix)
+			permissionDefaults.PUT("/roles/:role/matrix", SaveRoleDefaultPermissionMatrix)
+			permissionDefaults.GET("/departments/:department_id/matrix", GetDepartmentDefaultPermissionMatrix)
+			permissionDefaults.PUT("/departments/:department_id/matrix", SaveDepartmentDefaultPermissionMatrix)
 		}
 	}
 
@@ -1060,6 +1072,236 @@ func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
 	})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("expected department permission create status 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+}
+
+func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
+	r, token, lineA, _ := setupProgramCustomFieldValueTest(t)
+
+	lineB := models.ProductionLine{Name: "Line B", Code: "LINE-MATRIX-B", Type: "upper", Status: "active", ProcessID: lineA.ProcessID}
+	if err := database.DB.Create(&lineB).Error; err != nil {
+		t.Fatalf("create second line: %v", err)
+	}
+	user := models.User{
+		Name:       "Matrix User",
+		Password:   "hashed",
+		EmployeeID: "EMP-MATRIX-001",
+		Role:       "user",
+		Status:     "active",
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create matrix user: %v", err)
+	}
+	existing := models.UserPermission{UserID: user.ID, ProductionLineID: lineB.ID, CanView: true, CanManage: true}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("create existing permission: %v", err)
+	}
+
+	getResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, nil)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("expected matrix get status 200, got %d body=%s", getResp.Code, getResp.Body.String())
+	}
+	getPayload := decodeProductionLineCustomFieldResponse[permissionMatrixResponse](t, getResp)
+	if len(getPayload.Items) != 2 {
+		t.Fatalf("expected matrix to include every production line, got %#v", getPayload.Items)
+	}
+
+	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
+		"permissions": []map[string]any{
+			{"production_line_id": lineA.ID, "can_view": true, "can_download": true, "can_upload": false, "can_manage": false},
+			{"production_line_id": lineB.ID, "can_view": false, "can_download": false, "can_upload": false, "can_manage": false},
+		},
+	})
+	if saveResp.Code != http.StatusOK {
+		t.Fatalf("expected matrix save status 200, got %d body=%s", saveResp.Code, saveResp.Body.String())
+	}
+
+	var permissions []models.UserPermission
+	if err := database.DB.Where("user_id = ?", user.ID).Order("production_line_id ASC").Find(&permissions).Error; err != nil {
+		t.Fatalf("query user permissions: %v", err)
+	}
+	if len(permissions) != 1 || permissions[0].ProductionLineID != lineA.ID {
+		t.Fatalf("expected one remaining permission on line A, got %#v", permissions)
+	}
+	if !permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || permissions[0].CanManage {
+		t.Fatalf("unexpected saved permission bits: %#v", permissions[0])
+	}
+
+	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
+		"permissions": []map[string]any{
+			{"production_line_id": lineB.ID + 999, "can_view": true},
+		},
+	})
+	if invalidResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid line status 400, got %d body=%s", invalidResp.Code, invalidResp.Body.String())
+	}
+}
+
+func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	department := models.Department{Name: "Matrix Department", Description: "dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		path      string
+		model     any
+		where     string
+		whereArgs []any
+		seed      func()
+	}{
+		{
+			name:      "department matrix",
+			path:      fmt.Sprintf("/api/department-permissions/department/%d/matrix", department.ID),
+			model:     &models.DepartmentPermission{},
+			where:     "department_id = ? AND production_line_id = ?",
+			whereArgs: []any{department.ID, line.ID},
+			seed: func() {
+				if err := database.DB.Create(&models.DepartmentPermission{DepartmentID: department.ID, ProductionLineID: line.ID, CanView: true}).Error; err != nil {
+					t.Fatalf("seed department permission: %v", err)
+				}
+			},
+		},
+		{
+			name:      "role default matrix",
+			path:      "/api/permission-defaults/roles/user/matrix",
+			model:     &models.RoleDefaultPermission{},
+			where:     "role = ? AND production_line_id = ?",
+			whereArgs: []any{"user", line.ID},
+			seed: func() {
+				if err := database.DB.Create(&models.RoleDefaultPermission{Role: "user", ProductionLineID: line.ID, CanView: true}).Error; err != nil {
+					t.Fatalf("seed role default: %v", err)
+				}
+			},
+		},
+		{
+			name:      "department default matrix",
+			path:      fmt.Sprintf("/api/permission-defaults/departments/%d/matrix", department.ID),
+			model:     &models.DepartmentDefaultPermission{},
+			where:     "department_id = ? AND production_line_id = ?",
+			whereArgs: []any{department.ID, line.ID},
+			seed: func() {
+				if err := database.DB.Create(&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: line.ID, CanView: true}).Error; err != nil {
+					t.Fatalf("seed department default: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.seed()
+			deleteResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
+				"permissions": []map[string]any{
+					{"production_line_id": line.ID, "can_view": false, "can_download": false, "can_upload": false, "can_manage": false},
+				},
+			})
+			if deleteResp.Code != http.StatusOK {
+				t.Fatalf("expected delete save status 200, got %d body=%s", deleteResp.Code, deleteResp.Body.String())
+			}
+			var count int64
+			if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
+				t.Fatalf("count deleted rows: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("expected all-false save to delete row, count=%d", count)
+			}
+
+			upsertResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
+				"permissions": []map[string]any{
+					{"production_line_id": line.ID, "can_view": true, "can_download": false, "can_upload": true, "can_manage": false},
+				},
+			})
+			if upsertResp.Code != http.StatusOK {
+				t.Fatalf("expected upsert save status 200, got %d body=%s", upsertResp.Code, upsertResp.Body.String())
+			}
+			if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
+				t.Fatalf("count upserted rows: %v", err)
+			}
+			if count != 1 {
+				t.Fatalf("expected one upserted row, count=%d", count)
+			}
+		})
+	}
+}
+
+func TestEffectivePermissionPrecedenceUsesUserDepartmentRoleAndDepartmentDefaults(t *testing.T) {
+	r, token, lineA, _ := setupProgramCustomFieldValueTest(t)
+
+	lineB := models.ProductionLine{Name: "Line B", Code: "LINE-PREC-B", Type: "upper", Status: "active", ProcessID: lineA.ProcessID}
+	lineC := models.ProductionLine{Name: "Line C", Code: "LINE-PREC-C", Type: "upper", Status: "active", ProcessID: lineA.ProcessID}
+	lineD := models.ProductionLine{Name: "Line D", Code: "LINE-PREC-D", Type: "upper", Status: "active", ProcessID: lineA.ProcessID}
+	if err := database.DB.Create(&[]models.ProductionLine{lineB, lineC, lineD}).Error; err != nil {
+		t.Fatalf("create precedence lines: %v", err)
+	}
+	if err := database.DB.Where("code = ?", "LINE-PREC-B").First(&lineB).Error; err != nil {
+		t.Fatalf("reload line B: %v", err)
+	}
+	if err := database.DB.Where("code = ?", "LINE-PREC-C").First(&lineC).Error; err != nil {
+		t.Fatalf("reload line C: %v", err)
+	}
+	if err := database.DB.Where("code = ?", "LINE-PREC-D").First(&lineD).Error; err != nil {
+		t.Fatalf("reload line D: %v", err)
+	}
+
+	department := models.Department{Name: "Precedence Department", Description: "dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+	user := models.User{
+		Name:         "Precedence User",
+		Password:     "hashed",
+		EmployeeID:   "EMP-PREC-001",
+		Role:         "user",
+		Status:       "active",
+		DepartmentID: &department.ID,
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	records := []any{
+		&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: lineA.ID, CanView: true},
+		&models.RoleDefaultPermission{Role: "user", ProductionLineID: lineA.ID, CanDownload: true},
+		&models.DepartmentPermission{DepartmentID: department.ID, ProductionLineID: lineA.ID, CanUpload: true},
+		&models.UserPermission{UserID: user.ID, ProductionLineID: lineA.ID, CanManage: true},
+		&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: lineB.ID, CanView: true},
+		&models.RoleDefaultPermission{Role: "user", ProductionLineID: lineB.ID, CanDownload: true},
+		&models.DepartmentPermission{DepartmentID: department.ID, ProductionLineID: lineB.ID, CanUpload: true},
+		&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: lineC.ID, CanView: true},
+		&models.RoleDefaultPermission{Role: "user", ProductionLineID: lineC.ID, CanDownload: true},
+		&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: lineD.ID, CanView: true},
+	}
+	for _, record := range records {
+		if err := database.DB.Create(record).Error; err != nil {
+			t.Fatalf("create precedence record: %v", err)
+		}
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/department-permissions/user/%d/effective", user.ID), token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected effective status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	payload := decodeProductionLineCustomFieldResponse[[]permissionMatrixItem](t, resp)
+	byLine := map[uint]permissionMatrixItem{}
+	for _, item := range payload {
+		byLine[item.ProductionLineID] = item
+	}
+
+	if got := byLine[lineA.ID]; got.Source != "user" || !got.CanManage || got.CanUpload || got.CanDownload {
+		t.Fatalf("expected user permission to override every lower source, got %#v", got)
+	}
+	if got := byLine[lineB.ID]; got.Source != "department" || !got.CanUpload || got.CanDownload {
+		t.Fatalf("expected department permission to override defaults, got %#v", got)
+	}
+	if got := byLine[lineC.ID]; got.Source != "role_default" || !got.CanDownload || got.CanView {
+		t.Fatalf("expected role default to override department default, got %#v", got)
+	}
+	if got := byLine[lineD.ID]; got.Source != "department_default" || !got.CanView {
+		t.Fatalf("expected department default to apply, got %#v", got)
 	}
 }
 
