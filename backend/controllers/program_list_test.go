@@ -1,11 +1,15 @@
 package controllers
 
 import (
+	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 
 	"crane-system/database"
 	"crane-system/models"
+
+	"github.com/xuri/excelize/v2"
 )
 
 func TestGetProgramsIncludesCustomFieldValueSummaries(t *testing.T) {
@@ -108,5 +112,54 @@ func TestGetProgramsIncludesEmptyCustomFieldValueSummaries(t *testing.T) {
 	}
 	if len(loaded[0].CustomFieldValues) != 0 {
 		t.Fatalf("expected no enabled custom field summaries, got %#v", loaded[0].CustomFieldValues)
+	}
+}
+
+func TestExportProgramsExcelFiltersByKeyword(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+	matchingProgram := models.Program{
+		Name:             "Alpha Export Program",
+		Code:             "ALPHA-001",
+		ProductionLineID: line.ID,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&matchingProgram).Error; err != nil {
+		t.Fatalf("create matching program: %v", err)
+	}
+	nonMatchingProgram := models.Program{
+		Name:             "Beta Export Program",
+		Code:             "BETA-001",
+		ProductionLineID: line.ID,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&nonMatchingProgram).Error; err != nil {
+		t.Fatalf("create non-matching program: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, "/api/programs/export/excel?keyword=Alpha", token, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected export status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	f, err := excelize.OpenReader(bytes.NewReader(resp.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("open exported xlsx: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	rows, err := f.GetRows("Programs")
+	if err != nil {
+		t.Fatalf("read exported rows: %v", err)
+	}
+	exportedText := ""
+	for _, row := range rows {
+		exportedText += strings.Join(row, "\t") + "\n"
+	}
+
+	if !strings.Contains(exportedText, matchingProgram.Name) || !strings.Contains(exportedText, matchingProgram.Code) {
+		t.Fatalf("expected exported sheet to include matching program, got rows:\n%s", exportedText)
+	}
+	if strings.Contains(exportedText, nonMatchingProgram.Name) || strings.Contains(exportedText, nonMatchingProgram.Code) {
+		t.Fatalf("expected exported sheet to exclude non-matching program, got rows:\n%s", exportedText)
 	}
 }

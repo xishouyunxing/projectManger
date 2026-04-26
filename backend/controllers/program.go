@@ -201,6 +201,64 @@ func applyProgramCustomFieldFilters(query *gorm.DB, rawFilters map[uint]string) 
 	return query, nil
 }
 
+type programRequestFilterError struct {
+	Status  int
+	Message string
+}
+
+func applyProgramRequestFilters(c *gin.Context, query *gorm.DB) (*gorm.DB, *programRequestFilterError) {
+	if lineID := c.Query("production_line_id"); lineID != "" {
+		query = query.Where("production_line_id = ?", lineID)
+	}
+	if vehicleID := c.Query("vehicle_model_id"); vehicleID != "" {
+		query = query.Where("vehicle_model_id = ?", vehicleID)
+	}
+	if status := strings.TrimSpace(c.Query("status")); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
+		likeKeyword := "%" + strings.ToLower(keyword) + "%"
+		query = query.Where("LOWER(name) LIKE ? OR LOWER(code) LIKE ?", likeKeyword, likeKeyword)
+	}
+	if dateFrom := strings.TrimSpace(c.Query("date_from")); dateFrom != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateFrom)
+		if err != nil {
+			return nil, &programRequestFilterError{Status: http.StatusBadRequest, Message: "invalid date_from"}
+		}
+		query = query.Where("created_at >= ?", parsedDate)
+	}
+	if dateTo := strings.TrimSpace(c.Query("date_to")); dateTo != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateTo)
+		if err != nil {
+			return nil, &programRequestFilterError{Status: http.StatusBadRequest, Message: "invalid date_to"}
+		}
+		query = query.Where("created_at < ?", parsedDate.AddDate(0, 0, 1))
+	}
+
+	customFieldFilters := map[uint]string{}
+	for key, values := range c.Request.URL.Query() {
+		if !strings.HasPrefix(key, "custom_field_") || len(values) == 0 {
+			continue
+		}
+
+		fieldID, err := strconv.ParseUint(strings.TrimPrefix(key, "custom_field_"), 10, 64)
+		if err != nil || fieldID == 0 {
+			return nil, &programRequestFilterError{Status: http.StatusBadRequest, Message: "invalid custom field filter"}
+		}
+
+		if value := strings.TrimSpace(values[0]); value != "" {
+			customFieldFilters[uint(fieldID)] = value
+		}
+	}
+
+	query, err := applyProgramCustomFieldFilters(query, customFieldFilters)
+	if err != nil {
+		return nil, &programRequestFilterError{Status: http.StatusInternalServerError, Message: "查询失败"}
+	}
+
+	return query, nil
+}
+
 func GetPrograms(c *gin.Context) {
 	pageQuery := c.Query("page")
 	pageSizeQuery := c.Query("page_size")
@@ -240,56 +298,9 @@ func GetPrograms(c *gin.Context) {
 		}
 		query = query.Where("production_line_id IN ?", lineIDs)
 	}
-	if lineID := c.Query("production_line_id"); lineID != "" {
-		query = query.Where("production_line_id = ?", lineID)
-	}
-	if vehicleID := c.Query("vehicle_model_id"); vehicleID != "" {
-		query = query.Where("vehicle_model_id = ?", vehicleID)
-	}
-	if status := strings.TrimSpace(c.Query("status")); status != "" {
-		query = query.Where("status = ?", status)
-	}
-	if keyword := strings.TrimSpace(c.Query("keyword")); keyword != "" {
-		likeKeyword := "%" + strings.ToLower(keyword) + "%"
-		query = query.Where("LOWER(name) LIKE ? OR LOWER(code) LIKE ?", likeKeyword, likeKeyword)
-	}
-	if dateFrom := strings.TrimSpace(c.Query("date_from")); dateFrom != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateFrom)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_from"})
-			return
-		}
-		query = query.Where("created_at >= ?", parsedDate)
-	}
-	if dateTo := strings.TrimSpace(c.Query("date_to")); dateTo != "" {
-		parsedDate, err := time.Parse("2006-01-02", dateTo)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid date_to"})
-			return
-		}
-		query = query.Where("created_at < ?", parsedDate.AddDate(0, 0, 1))
-	}
-
-	customFieldFilters := map[uint]string{}
-	for key, values := range c.Request.URL.Query() {
-		if !strings.HasPrefix(key, "custom_field_") || len(values) == 0 {
-			continue
-		}
-
-		fieldID, err := strconv.ParseUint(strings.TrimPrefix(key, "custom_field_"), 10, 64)
-		if err != nil || fieldID == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid custom field filter"})
-			return
-		}
-
-		if value := strings.TrimSpace(values[0]); value != "" {
-			customFieldFilters[uint(fieldID)] = value
-		}
-	}
-
-	query, err = applyProgramCustomFieldFilters(query, customFieldFilters)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "????"})
+	query, filterErr := applyProgramRequestFilters(c, query)
+	if filterErr != nil {
+		c.JSON(filterErr.Status, gin.H{"error": filterErr.Message})
 		return
 	}
 
@@ -382,14 +393,10 @@ func ExportProgramsExcel(c *gin.Context) {
 			query = query.Where("production_line_id IN ?", lineIDs)
 		}
 	}
-	if lineID := c.Query("production_line_id"); lineID != "" {
-		query = query.Where("production_line_id = ?", lineID)
-	}
-	if vehicleID := c.Query("vehicle_model_id"); vehicleID != "" {
-		query = query.Where("vehicle_model_id = ?", vehicleID)
-	}
-	if status := strings.TrimSpace(c.Query("status")); status != "" {
-		query = query.Where("status = ?", status)
+	query, filterErr := applyProgramRequestFilters(c, query)
+	if filterErr != nil {
+		c.JSON(filterErr.Status, gin.H{"error": filterErr.Message})
+		return
 	}
 
 	var programs []models.Program

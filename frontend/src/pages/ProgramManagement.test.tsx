@@ -225,6 +225,35 @@ describe('ProgramManagement unified editor overlay', () => {
     expect(await screen.findByText('Night')).toBeInTheDocument()
   })
 
+  it('exports excel with the active keyword filter', async () => {
+    const createObjectURL = vi.fn(() => 'blob:program-export')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(window.URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectURL,
+    })
+    Object.defineProperty(window.URL, 'revokeObjectURL', {
+      configurable: true,
+      value: revokeObjectURL,
+    })
+    renderPage()
+
+    await screen.findByText('Program Alpha')
+    fireEvent.click(screen.getByRole('button', { name: /导出Excel/ }))
+
+    await waitFor(() => {
+      expect(mockApiGet).toHaveBeenCalledWith(
+        '/programs/export/excel',
+        expect.objectContaining({
+          params: expect.objectContaining({ keyword: 'Alpha' }),
+          responseType: 'blob',
+        }),
+      )
+    })
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:program-export')
+  })
+
   it('debounces program keyword search before applying it to the list query', async () => {
     renderPage('/programs')
 

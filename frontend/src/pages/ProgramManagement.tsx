@@ -323,6 +323,15 @@ const ProgramManagement = () => {
         params.production_line_id = filterProductionLine;
       if (filterVehicleModel) params.vehicle_model_id = filterVehicleModel;
       if (filterStatus) params.status = filterStatus;
+      if (searchKeyword.trim()) params.keyword = searchKeyword.trim();
+      if (filterDateRange[0]) params.date_from = filterDateRange[0];
+      if (filterDateRange[1]) params.date_to = filterDateRange[1];
+      Object.entries(customFieldFilterValues).forEach(([fieldId, value]) => {
+        const trimmedValue = value.trim();
+        if (trimmedValue) {
+          params[`custom_field_${fieldId}`] = trimmedValue;
+        }
+      });
 
       const response = await api.get('/programs/export/excel', {
         params,
