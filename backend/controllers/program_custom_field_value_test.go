@@ -1120,11 +1120,14 @@ func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
 	if err := database.DB.Where("user_id = ?", user.ID).Order("production_line_id ASC").Find(&permissions).Error; err != nil {
 		t.Fatalf("query user permissions: %v", err)
 	}
-	if len(permissions) != 1 || permissions[0].ProductionLineID != lineA.ID {
-		t.Fatalf("expected one remaining permission on line A, got %#v", permissions)
+	if len(permissions) != 2 || permissions[0].ProductionLineID != lineA.ID || permissions[1].ProductionLineID != lineB.ID {
+		t.Fatalf("expected explicit permission rows on line A and line B, got %#v", permissions)
 	}
 	if !permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || permissions[0].CanManage {
 		t.Fatalf("unexpected saved permission bits: %#v", permissions[0])
+	}
+	if permissions[1].CanView || permissions[1].CanDownload || permissions[1].CanUpload || permissions[1].CanManage {
+		t.Fatalf("expected all-false row to remain as explicit user override, got %#v", permissions[1])
 	}
 
 	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
@@ -1134,6 +1137,54 @@ func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
 	})
 	if invalidResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid line status 400, got %d body=%s", invalidResp.Code, invalidResp.Body.String())
+	}
+}
+
+func TestUserPermissionMatrixAllFalseOverridesInheritedPermission(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	department := models.Department{Name: "Inherited Permission Department", Description: "dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+	user := models.User{
+		Name:         "Inherited Permission User",
+		Password:     "hashed",
+		EmployeeID:   "EMP-INHERIT-001",
+		Role:         "user",
+		Status:       "active",
+		DepartmentID: &department.ID,
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := database.DB.Create(&models.DepartmentPermission{
+		DepartmentID:     department.ID,
+		ProductionLineID: line.ID,
+		CanView:          true,
+		CanDownload:      true,
+	}).Error; err != nil {
+		t.Fatalf("create inherited department permission: %v", err)
+	}
+
+	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
+		"permissions": []map[string]any{
+			{"production_line_id": line.ID, "can_view": false, "can_download": false, "can_upload": false, "can_manage": false},
+		},
+	})
+	if saveResp.Code != http.StatusOK {
+		t.Fatalf("expected matrix save status 200, got %d body=%s", saveResp.Code, saveResp.Body.String())
+	}
+
+	resolved, err := resolveUserLinePermission(user, line.ID)
+	if err != nil {
+		t.Fatalf("resolve permission: %v", err)
+	}
+	if resolved.Source != "user" {
+		t.Fatalf("expected explicit user override to win over inherited department permission, got %#v", resolved)
+	}
+	if resolved.CanView || resolved.CanDownload || resolved.CanUpload || resolved.CanManage {
+		t.Fatalf("expected all permissions denied by explicit user override, got %#v", resolved)
 	}
 }
 
@@ -1206,8 +1257,12 @@ func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 			if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
 				t.Fatalf("count deleted rows: %v", err)
 			}
-			if count != 0 {
-				t.Fatalf("expected all-false save to delete row, count=%d", count)
+			if tt.name == "department matrix" {
+				if count != 1 {
+					t.Fatalf("expected department all-false save to keep explicit override row, count=%d", count)
+				}
+			} else if count != 0 {
+				t.Fatalf("expected default all-false save to delete row, count=%d", count)
 			}
 
 			upsertResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{

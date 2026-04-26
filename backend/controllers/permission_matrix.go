@@ -104,25 +104,7 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
-			if permissionMatrixItemEmpty(item) {
-				if err := tx.Unscoped().Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).Delete(&models.UserPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-
-			var permission models.UserPermission
-			err := tx.Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).First(&permission).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			permission.UserID = userID
-			permission.ProductionLineID = item.ProductionLineID
-			permission.CanView = item.CanView
-			permission.CanDownload = item.CanDownload
-			permission.CanUpload = item.CanUpload
-			permission.CanManage = item.CanManage
-			if err := tx.Save(&permission).Error; err != nil {
+			if err := upsertUserPermissionOverride(tx, userID, item); err != nil {
 				return err
 			}
 		}
@@ -197,25 +179,7 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
-			if permissionMatrixItemEmpty(item) {
-				if err := tx.Unscoped().Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).Delete(&models.DepartmentPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-
-			var permission models.DepartmentPermission
-			err := tx.Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).First(&permission).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			permission.DepartmentID = departmentID
-			permission.ProductionLineID = item.ProductionLineID
-			permission.CanView = item.CanView
-			permission.CanDownload = item.CanDownload
-			permission.CanUpload = item.CanUpload
-			permission.CanManage = item.CanManage
-			if err := tx.Save(&permission).Error; err != nil {
+			if err := upsertDepartmentPermissionOverride(tx, departmentID, item); err != nil {
 				return err
 			}
 		}
@@ -500,4 +464,51 @@ func validatePermissionMatrixLines(items []savePermissionMatrixItem) error {
 
 func permissionMatrixItemEmpty(item savePermissionMatrixItem) bool {
 	return !item.CanView && !item.CanDownload && !item.CanUpload && !item.CanManage
+}
+
+func permissionMatrixUpdates(item savePermissionMatrixItem) map[string]any {
+	return map[string]any{
+		"can_view":     item.CanView,
+		"can_download": item.CanDownload,
+		"can_upload":   item.CanUpload,
+		"can_manage":   item.CanManage,
+	}
+}
+
+func upsertUserPermissionOverride(tx *gorm.DB, userID uint, item savePermissionMatrixItem) error {
+	updates := permissionMatrixUpdates(item)
+	var count int64
+	if err := tx.Model(&models.UserPermission{}).
+		Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return tx.Model(&models.UserPermission{}).
+			Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).
+			Updates(updates).Error
+	}
+
+	updates["user_id"] = userID
+	updates["production_line_id"] = item.ProductionLineID
+	return tx.Model(&models.UserPermission{}).Create(updates).Error
+}
+
+func upsertDepartmentPermissionOverride(tx *gorm.DB, departmentID uint, item savePermissionMatrixItem) error {
+	updates := permissionMatrixUpdates(item)
+	var count int64
+	if err := tx.Model(&models.DepartmentPermission{}).
+		Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return tx.Model(&models.DepartmentPermission{}).
+			Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).
+			Updates(updates).Error
+	}
+
+	updates["department_id"] = departmentID
+	updates["production_line_id"] = item.ProductionLineID
+	return tx.Model(&models.DepartmentPermission{}).Create(updates).Error
 }
