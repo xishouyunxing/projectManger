@@ -64,8 +64,20 @@ func CreatePermission(c *gin.Context) {
 		return
 	}
 
-	if err := database.DB.Create(&permission).Error; err != nil {
+	if err := database.DB.Model(&models.UserPermission{}).Create(map[string]any{
+		"user_id":            permission.UserID,
+		"production_line_id": permission.ProductionLineID,
+		"can_view":           permission.CanView,
+		"can_download":       permission.CanDownload,
+		"can_upload":         permission.CanUpload,
+		"can_manage":         permission.CanManage,
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+		return
+	}
+
+	if err := database.DB.Preload("User").Preload("User.Department").Preload("ProductionLine").Where("user_id = ? AND production_line_id = ?", permission.UserID, permission.ProductionLineID).First(&permission).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 

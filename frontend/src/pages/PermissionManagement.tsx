@@ -26,6 +26,9 @@ const { Title } = Typography;
 
 type PermissionBit = 'can_view' | 'can_download' | 'can_upload' | 'can_manage';
 
+type PermissionBitsSnapshot = Record<PermissionBit, boolean>;
+type PermissionMatrixSnapshot = PermissionBitsSnapshot & { override: boolean };
+
 type PermissionMatrixItem = {
   production_line_id: number;
   production_line_name: string;
@@ -34,6 +37,9 @@ type PermissionMatrixItem = {
   can_upload: boolean;
   can_manage: boolean;
   source?: string;
+  override?: boolean;
+  dirty?: boolean;
+  original?: PermissionMatrixSnapshot;
 };
 
 type User = {
@@ -69,14 +75,60 @@ const sourceLabels: Record<string, string> = {
   none: '无',
 };
 
-const toMatrixPayload = (rows: PermissionMatrixItem[]) => ({
-  permissions: rows.map((row) => ({
-    production_line_id: row.production_line_id,
-    can_view: row.can_view,
-    can_download: row.can_download,
-    can_upload: row.can_upload,
-    can_manage: row.can_manage,
-  })),
+const permissionBitKeys: PermissionBit[] = [
+  'can_view',
+  'can_download',
+  'can_upload',
+  'can_manage',
+];
+
+const snapshotPermissionBits = (
+  row: PermissionMatrixItem,
+): PermissionMatrixSnapshot => ({
+  can_view: row.can_view,
+  can_download: row.can_download,
+  can_upload: row.can_upload,
+  can_manage: row.can_manage,
+  override: Boolean(row.override),
+});
+
+const isMatrixRowDirty = (row: PermissionMatrixItem) => {
+  if (!row.original) {
+    return false;
+  }
+  return (
+    Boolean(row.override) !== row.original.override ||
+    permissionBitKeys.some((key) => row[key] !== row.original?.[key])
+  );
+};
+
+const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
+  rows.map((row) => {
+    const normalizedRow = {
+      ...row,
+      override: row.override ?? row.source !== 'none',
+    };
+    return {
+      ...normalizedRow,
+      dirty: false,
+      original: snapshotPermissionBits(normalizedRow),
+    };
+  });
+
+const toMatrixPayload = (
+  rows: PermissionMatrixItem[],
+  supportsOverrideMode = false,
+) => ({
+  permissions: rows
+    .filter((row) => row.dirty)
+    .map((row) => ({
+      production_line_id: row.production_line_id,
+      ...(supportsOverrideMode ? { inherit: !row.override } : {}),
+      can_view: row.can_view,
+      can_download: row.can_download,
+      can_upload: row.can_upload,
+      can_manage: row.can_manage,
+    })),
 });
 
 const PermissionManagement = () => {
@@ -160,7 +212,10 @@ const PermissionManagement = () => {
       setLoading(true);
       try {
         const response = await api.get(url);
-        setRows(Array.isArray(response.data?.items) ? response.data.items : []);
+        const items = Array.isArray(response.data?.items)
+          ? response.data.items
+          : [];
+        setRows(markMatrixRowsClean(items));
       } catch (error) {
         console.error(`Failed to load permission matrix ${url}:`, error);
         message.error('权限矩阵加载失败');
@@ -222,11 +277,38 @@ const PermissionManagement = () => {
     checked: boolean,
   ) => {
     setRows((rows) =>
-      rows.map((row) =>
-        row.production_line_id === productionLineID
-          ? { ...row, [bit]: checked }
-          : row,
-      ),
+      rows.map((row) => {
+        if (row.production_line_id !== productionLineID) {
+          return row;
+        }
+        const nextRow = { ...row, override: true, [bit]: checked };
+        return { ...nextRow, dirty: isMatrixRowDirty(nextRow) };
+      }),
+    );
+  };
+
+  const updateMatrixOverride = (
+    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
+    productionLineID: number,
+    checked: boolean,
+  ) => {
+    setRows((rows) =>
+      rows.map((row) => {
+        if (row.production_line_id !== productionLineID) {
+          return row;
+        }
+        const nextRow = checked
+          ? { ...row, override: true }
+          : {
+              ...row,
+              override: false,
+              can_view: false,
+              can_download: false,
+              can_upload: false,
+              can_manage: false,
+            };
+        return { ...nextRow, dirty: isMatrixRowDirty(nextRow) };
+      }),
     );
   };
 
@@ -235,10 +317,11 @@ const PermissionManagement = () => {
     rows: PermissionMatrixItem[],
     setSaving: (saving: boolean) => void,
     reload: () => void,
+    supportsOverrideMode = false,
   ) => {
     setSaving(true);
     try {
-      await api.put(url, toMatrixPayload(rows));
+      await api.put(url, toMatrixPayload(rows, supportsOverrideMode));
       message.success('权限矩阵已保存');
       reload();
     } catch (error) {
@@ -251,6 +334,7 @@ const PermissionManagement = () => {
 
   const buildColumns = (
     setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
+    supportsOverrideMode = false,
   ): TableColumnsType<PermissionMatrixItem> => [
     {
       title: '生产线',
@@ -264,8 +348,38 @@ const PermissionManagement = () => {
       dataIndex: 'source',
       key: 'source',
       width: 120,
-      render: (source?: string) => sourceLabels[source || 'none'] || source,
+      render: (source?: string, record?: PermissionMatrixItem) => {
+        if (supportsOverrideMode && record?.dirty) {
+          return record.override ? '显式覆盖' : '继承';
+        }
+        return sourceLabels[source || 'none'] || source;
+      },
     },
+    ...(supportsOverrideMode
+      ? [
+          {
+            title: '模式',
+            dataIndex: 'override',
+            key: 'override',
+            width: 120,
+            render: (_value: boolean, record: PermissionMatrixItem) => (
+              <Switch
+                aria-label={`${record.production_line_name} 覆盖`}
+                checked={Boolean(record.override)}
+                checkedChildren="覆盖"
+                unCheckedChildren="继承"
+                onChange={(checked) =>
+                  updateMatrixOverride(
+                    setRows,
+                    record.production_line_id,
+                    checked,
+                  )
+                }
+              />
+            ),
+          },
+        ]
+      : []),
     ...permissionBits.map((bit) => ({
       title: bit.label,
       dataIndex: bit.key,
@@ -275,8 +389,14 @@ const PermissionManagement = () => {
         <Switch
           aria-label={`${record.production_line_name} ${bit.label}`}
           checked={value}
+          disabled={supportsOverrideMode && !record.override}
           onChange={(checked) =>
-            updateMatrixBit(setRows, record.production_line_id, bit.key, checked)
+            updateMatrixBit(
+              setRows,
+              record.production_line_id,
+              bit.key,
+              checked,
+            )
           }
         />
       ),
@@ -315,7 +435,7 @@ const PermissionManagement = () => {
           icon={<SaveOutlined />}
           onClick={onSave}
           loading={saving}
-          disabled={rows.length === 0}
+          disabled={rows.length === 0 || !rows.some((row) => row.dirty)}
         >
           保存
         </Button>
@@ -327,15 +447,16 @@ const PermissionManagement = () => {
     rows: PermissionMatrixItem[],
     setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
     loading: boolean,
+    supportsOverrideMode = false,
   ) => (
     <Table
-      columns={buildColumns(setRows)}
+      columns={buildColumns(setRows, supportsOverrideMode)}
       dataSource={rows}
       rowKey="production_line_id"
       loading={loading || baseLoading}
       pagination={false}
       className="custom-table"
-      scroll={{ x: 760 }}
+      scroll={{ x: supportsOverrideMode ? 880 : 760 }}
     />
   );
 
@@ -422,11 +543,17 @@ const PermissionManagement = () => {
                                 setUserMatrix,
                                 setUserLoading,
                               ),
+                            true,
                           );
                         }
                       },
                     )}
-                    {renderMatrix(userMatrix, setUserMatrix, userLoading)}
+                    {renderMatrix(
+                      userMatrix,
+                      setUserMatrix,
+                      userLoading,
+                      true,
+                    )}
                   </>
                 ),
               },
@@ -477,6 +604,7 @@ const PermissionManagement = () => {
                                 setDepartmentMatrix,
                                 setDepartmentLoading,
                               ),
+                            true,
                           );
                         }
                       },
@@ -485,6 +613,7 @@ const PermissionManagement = () => {
                       departmentMatrix,
                       setDepartmentMatrix,
                       departmentLoading,
+                      true,
                     )}
                   </>
                 ),

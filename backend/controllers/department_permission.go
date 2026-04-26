@@ -60,8 +60,20 @@ func CreateDepartmentPermission(c *gin.Context) {
 		return
 	}
 
-	if err := database.DB.Create(&permission).Error; err != nil {
+	if err := database.DB.Model(&models.DepartmentPermission{}).Create(map[string]any{
+		"department_id":      permission.DepartmentID,
+		"production_line_id": permission.ProductionLineID,
+		"can_view":           permission.CanView,
+		"can_download":       permission.CanDownload,
+		"can_upload":         permission.CanUpload,
+		"can_manage":         permission.CanManage,
+	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建权限失败"})
+		return
+	}
+
+	if err := database.DB.Preload("Department").Preload("ProductionLine").Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&permission).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
 

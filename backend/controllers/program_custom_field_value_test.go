@@ -993,6 +993,10 @@ func TestPermissionRoutesRejectInvalidUserIDFormat(t *testing.T) {
 
 func TestCreatePermissionUpsertsPerUserAndLineAndValidatesRelations(t *testing.T) {
 	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+	lineB := models.ProductionLine{Name: "Permission Line B", Code: "LINE-PERM-B", Type: "upper", Status: "active", ProcessID: line.ProcessID}
+	if err := database.DB.Create(&lineB).Error; err != nil {
+		t.Fatalf("create second line: %v", err)
+	}
 
 	user := models.User{
 		Name:       "Permission User",
@@ -1046,10 +1050,33 @@ func TestCreatePermissionUpsertsPerUserAndLineAndValidatesRelations(t *testing.T
 	if permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || !permissions[0].CanManage {
 		t.Fatalf("expected permission to be updated in-place, got %#v", permissions[0])
 	}
+
+	falseCreateResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/permissions", token, map[string]any{
+		"user_id":            user.ID,
+		"production_line_id": lineB.ID,
+		"can_view":           false,
+		"can_download":       true,
+		"can_upload":         false,
+		"can_manage":         false,
+	})
+	if falseCreateResp.Code != http.StatusCreated {
+		t.Fatalf("expected false-view create status 201, got %d body=%s", falseCreateResp.Code, falseCreateResp.Body.String())
+	}
+	var falseCreated models.UserPermission
+	if err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, lineB.ID).First(&falseCreated).Error; err != nil {
+		t.Fatalf("query false-view permission: %v", err)
+	}
+	if falseCreated.CanView || !falseCreated.CanDownload || falseCreated.CanUpload || falseCreated.CanManage {
+		t.Fatalf("expected false-view permission to preserve explicit false values, got %#v", falseCreated)
+	}
 }
 
 func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
 	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+	lineB := models.ProductionLine{Name: "Department Permission Line B", Code: "LINE-DEPT-PERM-B", Type: "upper", Status: "active", ProcessID: line.ProcessID}
+	if err := database.DB.Create(&lineB).Error; err != nil {
+		t.Fatalf("create second line: %v", err)
+	}
 
 	department := models.Department{Name: "Permission Department", Description: "dept", Status: "active"}
 	if err := database.DB.Create(&department).Error; err != nil {
@@ -1072,6 +1099,25 @@ func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
 	})
 	if createResp.Code != http.StatusCreated {
 		t.Fatalf("expected department permission create status 201, got %d body=%s", createResp.Code, createResp.Body.String())
+	}
+
+	falseCreateResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/department-permissions", token, map[string]any{
+		"department_id":      department.ID,
+		"production_line_id": lineB.ID,
+		"can_view":           false,
+		"can_download":       true,
+		"can_upload":         false,
+		"can_manage":         false,
+	})
+	if falseCreateResp.Code != http.StatusCreated {
+		t.Fatalf("expected false-view department permission create status 201, got %d body=%s", falseCreateResp.Code, falseCreateResp.Body.String())
+	}
+	var falseCreated models.DepartmentPermission
+	if err := database.DB.Where("department_id = ? AND production_line_id = ?", department.ID, lineB.ID).First(&falseCreated).Error; err != nil {
+		t.Fatalf("query false-view department permission: %v", err)
+	}
+	if falseCreated.CanView || !falseCreated.CanDownload || falseCreated.CanUpload || falseCreated.CanManage {
+		t.Fatalf("expected department permission to preserve explicit false values, got %#v", falseCreated)
 	}
 }
 
@@ -1188,6 +1234,69 @@ func TestUserPermissionMatrixAllFalseOverridesInheritedPermission(t *testing.T) 
 	}
 }
 
+func TestUserPermissionMatrixCanClearOverrideBackToInheritance(t *testing.T) {
+	r, token, line, _ := setupProgramCustomFieldValueTest(t)
+
+	department := models.Department{Name: "Clear Override Department", Description: "dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+	user := models.User{
+		Name:         "Clear Override User",
+		Password:     "hashed",
+		EmployeeID:   "EMP-CLEAR-001",
+		Role:         "user",
+		Status:       "active",
+		DepartmentID: &department.ID,
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := database.DB.Create(&models.DepartmentPermission{
+		DepartmentID:     department.ID,
+		ProductionLineID: line.ID,
+		CanView:          true,
+		CanDownload:      true,
+	}).Error; err != nil {
+		t.Fatalf("create inherited department permission: %v", err)
+	}
+	if err := database.DB.Create(&models.UserPermission{
+		UserID:           user.ID,
+		ProductionLineID: line.ID,
+		CanView:          false,
+		CanDownload:      false,
+		CanUpload:        false,
+		CanManage:        false,
+	}).Error; err != nil {
+		t.Fatalf("create user override: %v", err)
+	}
+
+	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
+		"permissions": []map[string]any{
+			{"production_line_id": line.ID, "inherit": true},
+		},
+	})
+	if saveResp.Code != http.StatusOK {
+		t.Fatalf("expected matrix save status 200, got %d body=%s", saveResp.Code, saveResp.Body.String())
+	}
+
+	var count int64
+	if err := database.DB.Model(&models.UserPermission{}).Where("user_id = ? AND production_line_id = ?", user.ID, line.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count user override: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected user override to be cleared, count=%d", count)
+	}
+
+	resolved, err := resolveUserLinePermission(user, line.ID)
+	if err != nil {
+		t.Fatalf("resolve permission: %v", err)
+	}
+	if resolved.Source != "department" || !resolved.CanView || !resolved.CanDownload {
+		t.Fatalf("expected permission to fall back to department inheritance, got %#v", resolved)
+	}
+}
+
 func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 	r, token, line, _ := setupProgramCustomFieldValueTest(t)
 
@@ -1278,6 +1387,23 @@ func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 			}
 			if count != 1 {
 				t.Fatalf("expected one upserted row, count=%d", count)
+			}
+
+			if tt.name == "department matrix" {
+				clearResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
+					"permissions": []map[string]any{
+						{"production_line_id": line.ID, "inherit": true},
+					},
+				})
+				if clearResp.Code != http.StatusOK {
+					t.Fatalf("expected clear override status 200, got %d body=%s", clearResp.Code, clearResp.Body.String())
+				}
+				if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
+					t.Fatalf("count cleared rows: %v", err)
+				}
+				if count != 0 {
+					t.Fatalf("expected department override to be cleared, count=%d", count)
+				}
 			}
 		})
 	}

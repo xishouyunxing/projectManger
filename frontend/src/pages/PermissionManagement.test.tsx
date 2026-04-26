@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -57,7 +63,7 @@ const matrixRows = [
     production_line_name: '调试线',
     can_view: false,
     can_download: false,
-    can_upload: true,
+    can_upload: false,
     can_manage: false,
     source: 'none',
   },
@@ -146,16 +152,56 @@ describe('PermissionManagement permission matrices', () => {
         permissions: [
           {
             production_line_id: 10,
+            inherit: false,
             can_view: true,
             can_download: true,
             can_upload: false,
             can_manage: false,
           },
+        ],
+      });
+    });
+  });
+
+  it('can save an explicit all-false override for a row that currently inherits nothing', async () => {
+    renderPage();
+
+    await screen.findByText(productionLines[1].name);
+    fireEvent.click(screen.getByLabelText(`${productionLines[1].name} 覆盖`));
+    fireEvent.click(screen.getAllByRole('button', { name: /保存/ })[0]);
+
+    await waitFor(() => {
+      expect(mockApiPut).toHaveBeenCalledWith('/permissions/user/1/matrix', {
+        permissions: [
           {
             production_line_id: 11,
+            inherit: false,
             can_view: false,
             can_download: false,
-            can_upload: true,
+            can_upload: false,
+            can_manage: false,
+          },
+        ],
+      });
+    });
+  });
+
+  it('can clear an existing user override back to inheritance', async () => {
+    renderPage();
+
+    await screen.findByText(productionLines[0].name);
+    fireEvent.click(screen.getByLabelText(`${productionLines[0].name} 覆盖`));
+    fireEvent.click(screen.getAllByRole('button', { name: /保存/ })[0]);
+
+    await waitFor(() => {
+      expect(mockApiPut).toHaveBeenCalledWith('/permissions/user/1/matrix', {
+        permissions: [
+          {
+            production_line_id: 10,
+            inherit: true,
+            can_view: false,
+            can_download: false,
+            can_upload: false,
             can_manage: false,
           },
         ],

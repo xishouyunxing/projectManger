@@ -19,6 +19,7 @@ type permissionMatrixItem struct {
 	CanUpload          bool   `json:"can_upload"`
 	CanManage          bool   `json:"can_manage"`
 	Source             string `json:"source"`
+	Override           bool   `json:"override"`
 }
 
 type permissionMatrixResponse struct {
@@ -38,6 +39,7 @@ type savePermissionMatrixItem struct {
 	CanDownload      bool `json:"can_download"`
 	CanUpload        bool `json:"can_upload"`
 	CanManage        bool `json:"can_manage"`
+	Inherit          bool `json:"inherit"`
 }
 
 func GetUserPermissionMatrix(c *gin.Context) {
@@ -104,6 +106,12 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
+			if item.Inherit {
+				if err := tx.Unscoped().Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).Delete(&models.UserPermission{}).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			if err := upsertUserPermissionOverride(tx, userID, item); err != nil {
 				return err
 			}
@@ -179,6 +187,12 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
+			if item.Inherit {
+				if err := tx.Unscoped().Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).Delete(&models.DepartmentPermission{}).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			if err := upsertDepartmentPermissionOverride(tx, departmentID, item); err != nil {
 				return err
 			}
@@ -390,6 +404,7 @@ func buildPermissionMatrixItems(lines []models.ProductionLine, resolve func(uint
 			CanUpload:          canUpload,
 			CanManage:          canManage,
 			Source:             source,
+			Override:           source != "none",
 		})
 	}
 	return items
