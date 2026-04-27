@@ -55,6 +55,7 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize()+1024*1024)
 	form, err := c.MultipartForm()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "解析表单失败"})
@@ -64,6 +65,15 @@ func UploadFile(c *gin.Context) {
 	files := form.File["files"]
 	if len(files) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未找到文件"})
+		return
+	}
+
+	if err := validateMultipartUploadSize(files); err != nil {
+		if errors.Is(err, errUploadTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload too large"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 

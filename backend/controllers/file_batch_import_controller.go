@@ -5,8 +5,8 @@ import (
 	"crane-system/database"
 	"crane-system/models"
 	"crane-system/utils"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -59,6 +59,7 @@ type batchImportMapping struct {
 
 type batchImportTaskStatus struct {
 	Status       string    `json:"status"`
+	OwnerUser    uint      `json:"-"`
 	Total        int       `json:"total"`
 	Processed    int       `json:"processed"`
 	Success      int       `json:"success"`
@@ -175,7 +176,7 @@ func cleanupExpiredBatchTasksLocked(now time.Time) {
 	}
 }
 
-func createBatchTask(total int) int64 {
+func createBatchTask(total int, ownerUser uint) int64 {
 	batchTaskMu.Lock()
 	defer batchTaskMu.Unlock()
 
@@ -184,6 +185,7 @@ func createBatchTask(total int) int64 {
 	batchTaskSeq++
 	batchTasks[taskID] = &batchImportTaskStatus{
 		Status:    "processing",
+		OwnerUser: ownerUser,
 		Total:     total,
 		ExpiresAt: time.Now().Add(batchTaskStatusTTL),
 	}
@@ -214,6 +216,21 @@ func snapshotBatchTask(taskID int64) (batchImportTaskStatus, bool) {
 	return *status, true
 }
 
+func snapshotBatchTaskForUser(taskID int64, userID uint, isAdmin bool) (batchImportTaskStatus, bool, bool) {
+	batchTaskMu.Lock()
+	defer batchTaskMu.Unlock()
+
+	cleanupExpiredBatchTasksLocked(time.Now())
+	status, ok := batchTasks[taskID]
+	if !ok {
+		return batchImportTaskStatus{}, false, false
+	}
+	if !isAdmin && status.OwnerUser != userID {
+		return batchImportTaskStatus{}, true, false
+	}
+	return *status, true, true
+}
+
 func BatchUploadPrograms(c *gin.Context) {
 	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionManage)
 	if statusCode != 0 {
@@ -236,6 +253,7 @@ func BatchUploadPrograms(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize()+1024*1024)
 	if lineIDValue := strings.TrimSpace(c.PostForm("production_line_id")); lineIDValue != "" {
 		lineID, err := parseUintParam(lineIDValue)
 		if err != nil {
@@ -250,6 +268,10 @@ func BatchUploadPrograms(c *gin.Context) {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "???zip??"})
+		return
+	}
+	if fileHeader.Size > maxUploadSize() {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload too large"})
 		return
 	}
 
@@ -278,8 +300,12 @@ func BatchUploadPrograms(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "????????"})
 		return
 	}
-	if _, err = io.Copy(dst, src); err != nil {
+	if err = copyWithLimit(dst, src, maxUploadSize()); err != nil {
 		_ = dst.Close()
+		if errors.Is(err, errUploadTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload too large"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "????????"})
 		return
 	}
@@ -294,6 +320,14 @@ func BatchUploadPrograms(c *gin.Context) {
 		return
 	}
 	defer zr.Close()
+	if err := validateZipArchiveLimits(zr.File); err != nil {
+		if errors.Is(err, errUploadTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "upload too large"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	workstations := map[string]map[string][]batchUploadProgramFile{}
 	totalFiles := 0
@@ -410,7 +444,7 @@ func BatchImportPrograms(c *gin.Context) {
 		return
 	}
 
-	taskID := createBatchTask(preview.TotalPrograms)
+	taskID := createBatchTask(preview.TotalPrograms, userID)
 	go runBatchImportTask(taskID, preview, tempDir, mappingByName, userID)
 
 	c.JSON(http.StatusOK, gin.H{"task_id": taskID})
@@ -433,6 +467,17 @@ func runBatchImportTask(taskID int64, preview batchUploadPreview, tempDir string
 		return
 	}
 	defer zr.Close()
+	if err := validateZipArchiveLimits(zr.File); err != nil {
+		updateBatchTask(taskID, func(status *batchImportTaskStatus) {
+			status.Status = "failed"
+			if errors.Is(err, errUploadTooLarge) {
+				status.ErrorMessage = "upload too large"
+			} else {
+				status.ErrorMessage = err.Error()
+			}
+		})
+		return
+	}
 
 	archiveFiles := make(map[string]*zip.File, len(zr.File))
 	for _, file := range zr.File {
@@ -643,7 +688,7 @@ func writeBatchImportFile(archiveFile *zip.File, targetPath string) error {
 		return err
 	}
 
-	if _, err := io.Copy(writer, reader); err != nil {
+	if err := copyWithLimit(writer, reader, maxUploadSize()); err != nil {
 		_ = writer.Close()
 		return err
 	}
@@ -657,9 +702,26 @@ func GetTaskStatus(c *gin.Context) {
 		return
 	}
 
-	snapshot, ok := snapshotBatchTask(taskID)
+	userIDValue, ok := c.Get("user_id")
 	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "?????"})
+		return
+	}
+	userID, ok := userIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "??????"})
+		return
+	}
+	roleValue, _ := c.Get("user_role")
+	role, _ := roleValue.(string)
+
+	snapshot, exists, allowed := snapshotBatchTaskForUser(taskID, userID, role == "admin")
+	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "?????"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "???"})
 		return
 	}
 

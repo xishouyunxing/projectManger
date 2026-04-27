@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"archive/zip"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -35,6 +37,14 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 			programs.DELETE("/:id", DeleteProgram)
 			programs.GET("/by-vehicle/:vehicle_id", GetProgramsByVehicle)
 		}
+		lines := api.Group("/production-lines")
+		{
+			lines.DELETE("/:id", DeleteProductionLine)
+		}
+		processes := api.Group("/processes")
+		{
+			processes.DELETE("/:id", DeleteProcess)
+		}
 		programRelations := api.Group("/program-relations")
 		{
 			programRelations.GET("/program/:program_id", GetProgramRelations)
@@ -65,6 +75,12 @@ func setupProgramCustomFieldValueTestRouter() *gin.Engine {
 		{
 			vehicleModels.GET("", GetVehicleModels)
 			vehicleModels.GET("/:id", GetVehicleModel)
+			vehicleModels.DELETE("/:id", DeleteVehicleModel)
+		}
+		departments := api.Group("/departments")
+		{
+			departments.PUT("/:id", UpdateDepartment)
+			departments.DELETE("/:id", DeleteDepartment)
 		}
 		versions := api.Group("/versions")
 		{
@@ -1520,7 +1536,7 @@ func TestGetTaskStatusReturnsNotFoundAfterExpiration(t *testing.T) {
 	batchTaskMu.Lock()
 	taskID := batchTaskSeq
 	batchTaskSeq++
-	batchTasks[taskID] = &batchImportTaskStatus{Status: "completed", ExpiresAt: time.Now().Add(-time.Second)}
+	batchTasks[taskID] = &batchImportTaskStatus{Status: "completed", OwnerUser: 1, ExpiresAt: time.Now().Add(-time.Second)}
 	batchTaskMu.Unlock()
 
 	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/tasks/%d/status", taskID), token, nil)
@@ -1535,7 +1551,7 @@ func TestGetTaskStatusReturnsTaskBeforeExpiration(t *testing.T) {
 	batchTaskMu.Lock()
 	taskID := batchTaskSeq
 	batchTaskSeq++
-	batchTasks[taskID] = &batchImportTaskStatus{Status: "processing", Total: 2, Processed: 1, ExpiresAt: time.Now().Add(time.Minute)}
+	batchTasks[taskID] = &batchImportTaskStatus{Status: "processing", OwnerUser: 1, Total: 2, Processed: 1, ExpiresAt: time.Now().Add(time.Minute)}
 	batchTaskMu.Unlock()
 
 	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/tasks/%d/status", taskID), token, nil)
@@ -1552,15 +1568,45 @@ func TestGetTaskStatusReturnsTaskBeforeExpiration(t *testing.T) {
 	}
 }
 
+func TestGetTaskStatusRejectsNonOwner(t *testing.T) {
+	r, ownerToken, _, _ := setupProgramCustomFieldValueTest(t)
+	otherUser := models.User{Name: "Other Task Viewer", EmployeeID: "EMP-TASK-OTHER", Role: "user", Password: "hashed", Status: "active"}
+	if err := database.DB.Create(&otherUser).Error; err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	otherToken := createUserTokenForTest(t, otherUser.ID, "user")
+
+	batchTaskMu.Lock()
+	taskID := batchTaskSeq
+	batchTaskSeq++
+	batchTasks[taskID] = &batchImportTaskStatus{Status: "processing", OwnerUser: 1, Total: 2, Processed: 1, ExpiresAt: time.Now().Add(time.Minute)}
+	batchTaskMu.Unlock()
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/tasks/%d/status", taskID), otherToken, nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 for non-owner, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	ownerResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/tasks/%d/status", taskID), ownerToken, nil)
+	if ownerResp.Code != http.StatusOK {
+		t.Fatalf("expected owner/admin status 200, got %d body=%s", ownerResp.Code, ownerResp.Body.String())
+	}
+}
+
 func TestGetTaskStatusConcurrentPollingIsStable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("user_id", uint(1))
+		c.Set("user_role", "user")
+		c.Next()
+	})
 	r.GET("/api/tasks/:task_id/status", GetTaskStatus)
 
 	batchTaskMu.Lock()
 	taskID := batchTaskSeq
 	batchTaskSeq++
-	batchTasks[taskID] = &batchImportTaskStatus{Status: "processing", Total: 100, Processed: 10, ExpiresAt: time.Now().Add(time.Minute)}
+	batchTasks[taskID] = &batchImportTaskStatus{Status: "processing", OwnerUser: 1, Total: 100, Processed: 10, ExpiresAt: time.Now().Add(time.Minute)}
 	batchTaskMu.Unlock()
 
 	const workers = 12
@@ -1594,6 +1640,49 @@ func TestGetTaskStatusConcurrentPollingIsStable(t *testing.T) {
 	}
 }
 
+func TestValidateZipArchiveLimitsRejectsOversizedUncompressedTotal(t *testing.T) {
+	if config.AppConfig == nil {
+		if err := config.LoadConfig(); err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+	}
+	originalMaxUploadSize := config.AppConfig.Storage.MaxUploadSize
+	config.AppConfig.Storage.MaxUploadSize = 10
+	t.Cleanup(func() { config.AppConfig.Storage.MaxUploadSize = originalMaxUploadSize })
+
+	zipPath := filepath.Join(t.TempDir(), "oversized.zip")
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("create zip: %v", err)
+	}
+	zipWriter := zip.NewWriter(zipFile)
+	for _, entry := range []string{"ws/program/a.nc", "ws/program/b.nc"} {
+		writer, err := zipWriter.Create(entry)
+		if err != nil {
+			t.Fatalf("create zip entry: %v", err)
+		}
+		if _, err := writer.Write([]byte("12345678")); err != nil {
+			t.Fatalf("write zip entry: %v", err)
+		}
+	}
+	if err := zipWriter.Close(); err != nil {
+		t.Fatalf("close zip writer: %v", err)
+	}
+	if err := zipFile.Close(); err != nil {
+		t.Fatalf("close zip file: %v", err)
+	}
+
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	defer reader.Close()
+
+	if err := validateZipArchiveLimits(reader.File); !errors.Is(err, errUploadTooLarge) {
+		t.Fatalf("expected errUploadTooLarge, got %v", err)
+	}
+}
+
 func TestBatchImportProgramsRejectsMissingProductionLineID(t *testing.T) {
 	r, token, _, _ := setupProgramCustomFieldValueTest(t)
 
@@ -1619,6 +1708,83 @@ func TestBatchImportProgramsRejectsMissingProductionLineID(t *testing.T) {
 	body := decodeProductionLineCustomFieldResponse[map[string]any](t, resp)
 	if msg, _ := body["error"].(string); !strings.Contains(msg, "production_line_id is required") {
 		t.Fatalf("expected missing production_line_id error, got %v", body)
+	}
+}
+
+func TestDeleteMasterDataRejectsDependentRecords(t *testing.T) {
+	r, token, line, program := setupProgramCustomFieldValueTest(t)
+
+	lineResp := performProductionLineCustomFieldRequest(t, r, http.MethodDelete, fmt.Sprintf("/api/production-lines/%d", line.ID), token, nil)
+	if lineResp.Code != http.StatusConflict {
+		t.Fatalf("expected production line delete status 409, got %d body=%s", lineResp.Code, lineResp.Body.String())
+	}
+
+	if line.ProcessID == nil {
+		t.Fatalf("expected seeded line to have process id")
+	}
+	processResp := performProductionLineCustomFieldRequest(t, r, http.MethodDelete, fmt.Sprintf("/api/processes/%d", *line.ProcessID), token, nil)
+	if processResp.Code != http.StatusConflict {
+		t.Fatalf("expected process delete status 409, got %d body=%s", processResp.Code, processResp.Body.String())
+	}
+
+	vehicleModel := models.VehicleModel{Name: "Blocked Delete Model", Code: "VM-BLOCK-DEL", Status: "active"}
+	if err := database.DB.Create(&vehicleModel).Error; err != nil {
+		t.Fatalf("create vehicle model: %v", err)
+	}
+	if err := database.DB.Model(&models.Program{}).Where("id = ?", program.ID).Update("vehicle_model_id", vehicleModel.ID).Error; err != nil {
+		t.Fatalf("assign vehicle model: %v", err)
+	}
+	modelResp := performProductionLineCustomFieldRequest(t, r, http.MethodDelete, fmt.Sprintf("/api/vehicle-models/%d", vehicleModel.ID), token, nil)
+	if modelResp.Code != http.StatusConflict {
+		t.Fatalf("expected vehicle model delete status 409, got %d body=%s", modelResp.Code, modelResp.Body.String())
+	}
+
+	department := models.Department{Name: "Blocked Delete Dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+	user := models.User{Name: "Dept User", EmployeeID: "EMP-DEPT-BLOCK", Role: "user", Password: "hashed", Status: "active", DepartmentID: &department.ID}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create department user: %v", err)
+	}
+	departmentResp := performProductionLineCustomFieldRequest(t, r, http.MethodDelete, fmt.Sprintf("/api/departments/%d", department.ID), token, nil)
+	if departmentResp.Code != http.StatusConflict {
+		t.Fatalf("expected department delete status 409, got %d body=%s", departmentResp.Code, departmentResp.Body.String())
+	}
+}
+
+func TestUpdateDepartmentWhitelistsBusinessFields(t *testing.T) {
+	r, token, _, _ := setupProgramCustomFieldValueTest(t)
+
+	department := models.Department{Name: "Editable Dept", Description: "old", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	resp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/departments/%d", department.ID), token, map[string]any{
+		"id":          department.ID + 100,
+		"name":        " Updated Dept ",
+		"description": "new",
+		"status":      "inactive",
+		"deleted_at":  "2026-01-01T00:00:00Z",
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected update department status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var updated models.Department
+	if err := database.DB.First(&updated, department.ID).Error; err != nil {
+		t.Fatalf("reload department: %v", err)
+	}
+	if updated.ID != department.ID || updated.Name != "Updated Dept" || updated.Description != "new" || updated.Status != "inactive" {
+		t.Fatalf("unexpected updated department: %#v", updated)
+	}
+
+	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/departments/%d", department.ID), token, map[string]any{
+		"status": "archived",
+	})
+	if invalidResp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid status 400, got %d body=%s", invalidResp.Code, invalidResp.Body.String())
 	}
 }
 

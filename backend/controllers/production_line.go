@@ -225,6 +225,21 @@ func DeleteProductionLine(c *gin.Context) {
 		return
 	}
 
+	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
+		{Model: &models.Program{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "programs"},
+		{Model: &models.ProductionLineCustomField{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "custom fields"},
+		{Model: &models.UserPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "user permissions"},
+		{Model: &models.DepartmentPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "department permissions"},
+		{Model: &models.RoleDefaultPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "role default permissions"},
+		{Model: &models.DepartmentDefaultPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "department default permissions"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "production line is in use by " + dependency})
+		return
+	}
+
 	result := database.DB.Delete(&models.ProductionLine{}, lineID)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
@@ -350,6 +365,16 @@ func DeleteProcess(c *gin.Context) {
 	processID, err := parseUintParam(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "工序ID格式错误"})
+		return
+	}
+
+	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
+		{Model: &models.ProductionLine{}, Where: "process_id = ?", Args: []any{processID}, Label: "production lines"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "process is in use by " + dependency})
 		return
 	}
 

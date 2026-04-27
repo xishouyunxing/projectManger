@@ -265,6 +265,16 @@ func DeleteVehicleModel(c *gin.Context) {
 		return
 	}
 
+	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
+		{Model: &models.Program{}, Where: "vehicle_model_id = ?", Args: []any{vehicleModelID}, Label: "programs"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "vehicle model is in use by " + dependency})
+		return
+	}
+
 	result := database.DB.Delete(&models.VehicleModel{}, vehicleModelID)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})

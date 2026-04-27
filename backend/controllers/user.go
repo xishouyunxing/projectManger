@@ -122,29 +122,106 @@ func GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+type createUserRequest struct {
+	EmployeeID   string `json:"employee_id"`
+	EmployeeNo   string `json:"employee_no"`
+	Name         string `json:"name"`
+	DepartmentID *uint  `json:"department_id"`
+	Role         string `json:"role"`
+	Password     string `json:"password"`
+	Status       string `json:"status"`
+}
+
 func CreateUser(c *gin.Context) {
-	var user models.User
-	if err := c.ShouldBindJSON(&user); err != nil {
+	var req createUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 密码加密
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+	req.EmployeeID = strings.TrimSpace(req.EmployeeID)
+	req.EmployeeNo = strings.TrimSpace(req.EmployeeNo)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Role = strings.TrimSpace(req.Role)
+	req.Password = strings.TrimSpace(req.Password)
+	req.Status = strings.TrimSpace(req.Status)
+	if req.Status == "" {
+		req.Status = "active"
+	}
+	if req.EmployeeID == "" || req.Name == "" || req.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user payload"})
 		return
 	}
-	user.Password = string(hashedPassword)
+	if err := validateUserRoleValue(req.Role); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateUserStatusValue(req.Status); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.DepartmentID != nil {
+		if *req.DepartmentID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department"})
+			return
+		}
+		if err := validateDepartmentExists(*req.DepartmentID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "password hash failed"})
+		return
+	}
+
+	user := models.User{
+		EmployeeID:   req.EmployeeID,
+		EmployeeNo:   req.EmployeeNo,
+		Name:         req.Name,
+		DepartmentID: req.DepartmentID,
+		Role:         req.Role,
+		Password:     string(hashedPassword),
+		Status:       req.Status,
+	}
 	if err := database.DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "create failed"})
+		return
+	}
+	if err := database.DB.Preload("Department").First(&user, user.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
 	c.JSON(http.StatusCreated, user)
 }
 
+/*
+	func createUserUnsafe(c *gin.Context) {
+		var user models.User
+		if err := c.ShouldBindJSON(&user); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// 密码加密
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+			return
+		}
+		user.Password = string(hashedPassword)
+
+		if err := database.DB.Create(&user).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建失败"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, user)
+	}
+*/
 func UpdateUser(c *gin.Context) {
 	targetID, err := parseUintParam(c.Param("id"))
 	if err != nil {
@@ -232,6 +309,9 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 			if err := json.Unmarshal(raw, &value); err != nil || value == 0 {
 				return nil, invalidUserFieldValue(field)
 			}
+			if err := validateDepartmentExists(value); err != nil {
+				return nil, err
+			}
 			updates["department_id"] = value
 		case "role":
 			if !isAdmin {
@@ -241,8 +321,8 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 			if err != nil {
 				return nil, err
 			}
-			if value != "admin" && value != "user" {
-				return nil, invalidUserFieldValue(field)
+			if err := validateUserRoleValue(value); err != nil {
+				return nil, err
 			}
 			updates["role"] = value
 		case "status":
@@ -253,8 +333,8 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 			if err != nil {
 				return nil, err
 			}
-			if value != "active" && value != "inactive" {
-				return nil, invalidUserFieldValue(field)
+			if err := validateUserStatusValue(value); err != nil {
+				return nil, err
 			}
 			updates["status"] = value
 		case "password", "id", "created_at", "updated_at", "deleted_at":
@@ -265,6 +345,20 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 	}
 
 	return updates, nil
+}
+
+func validateUserRoleValue(role string) error {
+	if role != "admin" && role != "user" {
+		return invalidUserFieldValue("role")
+	}
+	return nil
+}
+
+func validateUserStatusValue(status string) error {
+	if status != "active" && status != "inactive" {
+		return invalidUserFieldValue("status")
+	}
+	return nil
 }
 
 func parseJSONStringField(raw json.RawMessage, field string) (string, error) {

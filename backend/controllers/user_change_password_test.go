@@ -57,6 +57,7 @@ func setupUpdateUserTestRouter() *gin.Engine {
 	api.Use(middleware.AuthMiddleware())
 	{
 		users := api.Group("/users")
+		users.POST("", CreateUser)
 		users.PUT("/:id", UpdateUser)
 	}
 	return r
@@ -90,6 +91,23 @@ func performUpdateUserRequest(t *testing.T, r http.Handler, token string, target
 
 	path := fmt.Sprintf("/api/users/%d", targetUserID)
 	req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	return resp
+}
+
+func performCreateUserRequest(t *testing.T, r http.Handler, token string, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -276,5 +294,96 @@ func TestUpdateUserDoesNotAllowSelfServiceDepartmentEscalation(t *testing.T) {
 	}
 	if reloaded.Status != "inactive" {
 		t.Fatalf("expected admin status update to persist, got %q", reloaded.Status)
+	}
+}
+
+func TestCreateUserValidatesRoleStatusAndDepartment(t *testing.T) {
+	database.DB = openProductionLineCustomFieldTestDB(t)
+	r := setupUpdateUserTestRouter()
+
+	adminUser := models.User{
+		Name:       "Admin",
+		EmployeeID: "EMP-CREATE-ADMIN",
+		Role:       "admin",
+		Password:   createHashedPasswordForTest(t, "admin-old"),
+		Status:     "active",
+	}
+	if err := database.DB.Create(&adminUser).Error; err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	adminToken := createUserTokenForTest(t, adminUser.ID, "admin")
+
+	department := models.Department{Name: "Valid Dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	basePayload := map[string]any{
+		"employee_id":   "EMP-NEW",
+		"name":          "New User",
+		"password":      "new-password",
+		"role":          "user",
+		"status":        "active",
+		"department_id": department.ID,
+	}
+
+	resp := performCreateUserRequest(t, r, adminToken, basePayload)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected create status 201, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	invalidDepartmentPayload := map[string]any{}
+	for key, value := range basePayload {
+		invalidDepartmentPayload[key] = value
+	}
+	invalidDepartmentPayload["employee_id"] = "EMP-BAD-DEPT"
+	invalidDepartmentPayload["department_id"] = department.ID + 999
+	resp = performCreateUserRequest(t, r, adminToken, invalidDepartmentPayload)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid department status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	invalidRolePayload := map[string]any{}
+	for key, value := range basePayload {
+		invalidRolePayload[key] = value
+	}
+	invalidRolePayload["employee_id"] = "EMP-BAD-ROLE"
+	invalidRolePayload["role"] = "superuser"
+	resp = performCreateUserRequest(t, r, adminToken, invalidRolePayload)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid role status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	invalidStatusPayload := map[string]any{}
+	for key, value := range basePayload {
+		invalidStatusPayload[key] = value
+	}
+	invalidStatusPayload["employee_id"] = "EMP-BAD-STATUS"
+	invalidStatusPayload["status"] = "pending"
+	resp = performCreateUserRequest(t, r, adminToken, invalidStatusPayload)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid status status 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestUpdateUserRejectsInvalidDepartment(t *testing.T) {
+	database.DB = openProductionLineCustomFieldTestDB(t)
+	r := setupUpdateUserTestRouter()
+
+	adminUser := models.User{Name: "Admin", EmployeeID: "EMP-DEPT-ADMIN", Role: "admin", Password: createHashedPasswordForTest(t, "admin-old"), Status: "active"}
+	targetUser := models.User{Name: "Target", EmployeeID: "EMP-DEPT-TARGET", Role: "user", Password: createHashedPasswordForTest(t, "target-old"), Status: "active"}
+	if err := database.DB.Create(&adminUser).Error; err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	if err := database.DB.Create(&targetUser).Error; err != nil {
+		t.Fatalf("create target user: %v", err)
+	}
+
+	adminToken := createUserTokenForTest(t, adminUser.ID, "admin")
+	resp := performUpdateUserRequest(t, r, adminToken, targetUser.ID, map[string]any{
+		"department_id": uint(999),
+	})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid department update status 400, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }

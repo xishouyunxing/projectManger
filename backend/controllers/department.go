@@ -5,6 +5,7 @@ import (
 	"crane-system/models"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -102,6 +103,12 @@ func CreateDepartment(c *gin.Context) {
 	c.JSON(http.StatusCreated, department)
 }
 
+type updateDepartmentRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	Status      *string `json:"status"`
+}
+
 func UpdateDepartment(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("id"))
 	if err != nil {
@@ -115,9 +122,34 @@ func UpdateDepartment(c *gin.Context) {
 		return
 	}
 
-	var updates map[string]interface{}
-	if err := c.ShouldBindJSON(&updates); err != nil {
+	var req updateDepartmentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请检查输入信息是否正确"})
+		return
+	}
+
+	updates := map[string]interface{}{}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid name"})
+			return
+		}
+		updates["name"] = name
+	}
+	if req.Description != nil {
+		updates["description"] = *req.Description
+	}
+	if req.Status != nil {
+		status := strings.TrimSpace(*req.Status)
+		if status != "active" && status != "inactive" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+			return
+		}
+		updates["status"] = status
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未提供可更新字段"})
 		return
 	}
 
@@ -133,6 +165,18 @@ func DeleteDepartment(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "部门ID格式错误"})
+		return
+	}
+
+	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
+		{Model: &models.User{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "users"},
+		{Model: &models.DepartmentPermission{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "department permissions"},
+		{Model: &models.DepartmentDefaultPermission{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "department default permissions"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "department is in use by " + dependency})
 		return
 	}
 
