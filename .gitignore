@@ -84,6 +84,9 @@ deploy.zip
 
 # Local task tracking and temporary analysis artifacts
 task.md
+planning.md
+fnpm.cmd
+fnpm.sh
 *.diff
 current.diff
 out.diff
