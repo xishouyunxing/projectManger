@@ -259,6 +259,8 @@ func applyProgramRequestFilters(c *gin.Context, query *gorm.DB) (*gorm.DB, *prog
 	return query, nil
 }
 
+// GetPrograms 是程序列表和候选选择器共用接口。
+// 支持分页、关键字、产线/车型/状态/日期和自定义字段筛选；调用方应按场景控制 page_size，避免候选弹窗拉全量。
 func GetPrograms(c *gin.Context) {
 	pageQuery := c.Query("page")
 	pageSizeQuery := c.Query("page_size")
@@ -374,6 +376,8 @@ func summarizeEnabledProgramCustomFieldValues(values []models.ProgramCustomField
 	return summaries
 }
 
+// ExportProgramsExcel 按当前用户可查看的产线导出程序清单。
+// 普通用户必须叠加产线权限过滤，避免导出未授权产线的数据。
 func ExportProgramsExcel(c *gin.Context) {
 	allowedLineIDs, statusCode, message := resolveAuthorizedLineIDs(c, lineActionView)
 	if statusCode != 0 {
@@ -534,6 +538,8 @@ func validateProgramStatus(status string) error {
 	}
 }
 
+// validateProgramRelations 在写入程序前校验主数据存在性。
+// 这里是程序与产线/车型建立业务关系的最后一道防线。
 func validateProgramRelations(tx *gorm.DB, productionLineID uint, vehicleModelID *uint) error {
 	if productionLineID == 0 {
 		return errors.New("invalid production line")
@@ -839,6 +845,8 @@ func DeleteProgram(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "????"})
 }
 
+// GetProgramsByVehicle 用于车型详情抽屉展示程序列表。
+// 返回前仍按程序所在产线过滤权限，避免通过车型入口绕过产线授权。
 func GetProgramsByVehicle(c *gin.Context) {
 	vehicleID, err := parseUintParam(c.Param("vehicle_id"))
 	if err != nil {

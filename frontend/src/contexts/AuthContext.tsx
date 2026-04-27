@@ -31,9 +31,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // 4小时无交互自动登出（单位：毫秒）
+// 认证上下文负责维护前端登录态、自动登出计时和管理员角色判断。
+// 其他组件只通过 useAuth 读取状态，避免散落读取 localStorage。
 const AUTO_LOGOUT_TIME = 4 * 60 * 60 * 1000;
 
 // 获取初始状态（同步读取 localStorage）
+// 同步读取 localStorage，保证首次渲染时就能判断登录态，避免页面闪回登录页。
 const getInitialState = () => {
   const storedToken = localStorage.getItem('token');
   const storedUser = localStorage.getItem('user');
@@ -72,6 +75,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(initialState.token);
 
   // 更新最后活动时间
+  // 记录用户最后活动时间，供自动登出逻辑使用。
   const updateLastActivity = () => {
     localStorage.setItem('lastActivity', Date.now().toString());
   };
@@ -125,6 +129,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => clearInterval(intervalId);
   }, [token]);
 
+  // 登录成功后同时更新 React 状态和 localStorage，刷新页面后可继续保持会话。
   const login = async (employeeId: string, password: string) => {
     const response = await api.post('/login', {
       employee_id: employeeId,
@@ -139,6 +144,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     updateLastActivity();
   };
 
+  // 登出必须同步清理 token、用户信息和活动时间，避免旧状态影响后续登录。
   const logout = () => {
     setUser(null);
     setToken(null);

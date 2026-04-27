@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// User 是系统登录账号，也是权限解析的主体。
+// 产线权限会先看用户显式覆盖，再回落到部门权限、角色默认和部门默认权限。
 type User struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -22,6 +24,8 @@ type User struct {
 	Department *Department `json:"department,omitempty"`
 }
 
+// UserPermission 表示“某用户 + 某产线”的显式权限覆盖。
+// 注意：四个权限位都允许为 false，用来表达管理员明确拒绝该用户访问该产线。
 type UserPermission struct {
 	ID               uint           `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time      `json:"created_at"`

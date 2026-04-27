@@ -199,6 +199,7 @@ const ProgramManagement = () => {
     [relatedPrograms],
   );
 
+  // 映射候选需要排除当前程序、已作为子程序映射的程序，以及本父程序已关联的子程序。
   const availableMappingCandidatePrograms = useMemo(
     () =>
       mappingCandidatePrograms
@@ -244,6 +245,7 @@ const ProgramManagement = () => {
   };
 
   useEffect(() => {
+    // 主列表搜索做防抖，减少输入过程中对 /programs 的重复请求。
     const timeoutId = window.setTimeout(() => {
       setProgramPage(1);
       setSearchKeyword(searchInputValue.trim());
@@ -255,6 +257,7 @@ const ProgramManagement = () => {
   }, [searchInputValue]);
 
   useEffect(() => {
+    // 映射候选搜索单独防抖，避免弹窗中每个按键都触发候选查询。
     const timeoutId = window.setTimeout(() => {
       setDebouncedMappingSearchKeyword(mappingSearchKeyword.trim());
     }, 300);
@@ -273,6 +276,7 @@ const ProgramManagement = () => {
     let cancelled = false;
     const loadMappingCandidates = async () => {
       try {
+        // 候选列表只取前 50 条，后续如需大规模选择应改成服务端分页选择器。
         const response = await api.get('/programs', {
           params: {
             page: 1,

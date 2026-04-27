@@ -50,6 +50,8 @@ export const useProgramManagementData = ({
     ProgramCustomFieldDefinition[]
   >([]);
 
+  // 列表数据只依赖分页和筛选条件，不混入低频变化的选择器数据。
+  // 这样搜索、翻页时不会重复请求产线和车型字典。
   const loadData = async () => {
     setTableLoading(true);
     try {
@@ -111,6 +113,8 @@ export const useProgramManagementData = ({
     return buildEnabledCustomFields(response.data);
   };
 
+  // 选择器数据用于筛选和表单下拉，进入页面加载一次即可。
+  // 如后续支持在本页新增产线/车型，再在对应成功回调中主动刷新。
   const loadSelectorData = async () => {
     try {
       const [linesRes, modelsRes] = await Promise.all([
@@ -148,6 +152,7 @@ export const useProgramManagementData = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 当前页数据的前端排序：正在被本人编辑的程序置顶，选中程序优先展示。
   const filteredPrograms = useMemo(() => {
     return programs.filter((a) => Boolean(a)).sort((a, b) => {
       if (selectedProgramId) {

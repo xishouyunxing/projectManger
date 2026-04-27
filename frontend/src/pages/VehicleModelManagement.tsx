@@ -52,6 +52,7 @@ const VehicleModelManagement = () => {
     [vehicleModels],
   );
 
+  // 抽屉中按产线展示程序，先分组再渲染，避免每次展开都重复 filter/some。
   const programsByProductionLine = useMemo(() => {
     const groupedPrograms = new Map<number, any[]>();
     programs.forEach((program: any) => {
@@ -86,10 +87,12 @@ const VehicleModelManagement = () => {
   };
 
   useEffect(() => {
+    // 车型列表随筛选条件变化刷新；生产线字典独立加载，避免重复请求。
     loadData(1, tablePagination.pageSize);
   }, [searchKeyword, filterSeries, filterDateRange]);
 
   useEffect(() => {
+    // 输入框防抖更新真正参与查询的 searchKeyword。
     const timeoutId = window.setTimeout(() => {
       setSearchKeyword(searchInputValue.trim());
     }, 300);
@@ -103,6 +106,7 @@ const VehicleModelManagement = () => {
     loadProductionLines();
   }, []);
 
+  // 生产线只作为抽屉分组字典使用，进入页面加载一次即可。
   const loadProductionLines = async () => {
     try {
       const linesRes = await api.get('/production-lines');
@@ -112,6 +116,7 @@ const VehicleModelManagement = () => {
     }
   };
 
+  // 车型列表请求只负责车型分页和筛选，不再混入生产线字典请求。
   const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {

@@ -18,6 +18,8 @@ type LoginRequest struct {
 	Password   string `json:"password" binding:"required"`
 }
 
+// Login 校验工号和密码并签发 JWT。
+// 返回的 user 会被前端缓存到 AuthContext，后续请求通过 Authorization Bearer token 鉴权。
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

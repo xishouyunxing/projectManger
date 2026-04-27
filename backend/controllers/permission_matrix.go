@@ -33,6 +33,8 @@ type savePermissionMatrixRequest struct {
 	Permissions []savePermissionMatrixItem `json:"permissions"`
 }
 
+// savePermissionMatrixItem 是矩阵保存的最小变更单元。
+// Inherit=true 表示清除显式覆盖并回到继承；Inherit=false 表示写入显式覆盖，四个权限位全 false 也必须保留为“显式拒绝”。
 type savePermissionMatrixItem struct {
 	ProductionLineID uint `json:"production_line_id" binding:"required"`
 	CanView          bool `json:"can_view"`
@@ -83,6 +85,8 @@ func GetUserPermissionMatrix(c *gin.Context) {
 	})
 }
 
+// SaveUserPermissionMatrix 只处理前端提交的脏行。
+// 这样可以避免把未修改的继承权限固化成用户显式覆盖。
 func SaveUserPermissionMatrix(c *gin.Context) {
 	userID, err := parseUintParam(c.Param("user_id"))
 	if err != nil {
@@ -164,6 +168,7 @@ func GetDepartmentPermissionMatrix(c *gin.Context) {
 	})
 }
 
+// SaveDepartmentPermissionMatrix 与用户矩阵一致：Inherit 清除部门覆盖，否则写入显式覆盖。
 func SaveDepartmentPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
@@ -392,6 +397,8 @@ func loadPermissionMatrixLines() ([]models.ProductionLine, error) {
 	return lines, nil
 }
 
+// buildPermissionMatrixItems 为前端统一补齐所有产线行。
+// Override 表示该行当前是否来自显式配置；前端据此展示“继承/覆盖”模式。
 func buildPermissionMatrixItems(lines []models.ProductionLine, resolve func(uint) (bool, bool, bool, bool, string)) []permissionMatrixItem {
 	items := make([]permissionMatrixItem, 0, len(lines))
 	for _, line := range lines {

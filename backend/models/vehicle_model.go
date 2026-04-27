@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// VehicleModel 表示车型主数据。
+// 程序通常由“车型 + 生产线”共同定位，删除前必须检查关联程序。
 type VehicleModel struct {
 	ID          uint           `gorm:"primarykey" json:"id"`
 	CreatedAt   time.Time      `json:"created_at"`

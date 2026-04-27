@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// Program 是文件、版本、映射和自定义字段值的主业务实体。
+// 权限校验通常通过 Program.ProductionLineID 回到产线维度判断。
 type Program struct {
 	ID               uint                `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time           `json:"created_at"`
@@ -30,6 +32,8 @@ type Program struct {
 	CustomFieldValues []ProgramCustomFieldValue `json:"custom_field_values,omitempty"`
 }
 
+// ProgramMappingInfo 是列表接口返回的轻量映射摘要，不持久化到数据库。
+// 前端用它判断当前程序是否已经作为子程序被映射。
 type ProgramMappingInfo struct {
 	MappingID         uint   `json:"mapping_id"`
 	ParentProgramID   uint   `json:"parent_program_id"`
@@ -37,6 +41,8 @@ type ProgramMappingInfo struct {
 	ParentProgramCode string `json:"parent_program_code"`
 }
 
+// ProgramFile 记录上传文件的物理路径和业务归属。
+// 文件名可重复，但物理路径必须唯一，避免覆盖历史文件。
 type ProgramFile struct {
 	ID          uint           `gorm:"primarykey" json:"id"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -56,6 +62,8 @@ type ProgramFile struct {
 	Uploader User    `gorm:"foreignKey:UploadedBy" json:"uploader,omitempty"`
 }
 
+// ProgramVersion 表示程序版本与文件的绑定关系。
+// 同一程序只能有一个当前版本，激活版本时要同步维护 IsCurrent。
 type ProgramVersion struct {
 	ID         uint           `gorm:"primarykey" json:"id"`
 	CreatedAt  time.Time      `json:"created_at"`
@@ -74,6 +82,8 @@ type ProgramVersion struct {
 	Uploader User        `gorm:"foreignKey:UploadedBy" json:"uploader,omitempty"`
 }
 
+// ProgramRelation 表示两个程序之间的业务关联。
+// 返回关联信息时仍需分别校验两端程序的产线权限，避免跨产线泄露。
 type ProgramRelation struct {
 	ID               uint           `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time      `json:"created_at"`
@@ -89,6 +99,8 @@ type ProgramRelation struct {
 	RelatedProgram Program `gorm:"foreignKey:RelatedProgramID" json:"related_program,omitempty"`
 }
 
+// ProgramMapping 表示父程序共享给子程序的映射关系。
+// ChildProgramID 唯一，保证一个子程序只从一个父程序继承文件/版本。
 type ProgramMapping struct {
 	ID              uint           `gorm:"primarykey" json:"id"`
 	CreatedAt       time.Time      `json:"created_at"`

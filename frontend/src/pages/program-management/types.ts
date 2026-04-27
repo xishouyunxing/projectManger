@@ -1,3 +1,6 @@
+// 程序管理模块的前端类型集中放在这里，避免主页面被后端响应结构细节淹没。
+// 字段命名保持后端 JSON snake_case，减少接口转换成本。
+
 export interface ProductionLine {
   id: number;
   name: string;
@@ -62,6 +65,7 @@ export interface Program {
   custom_field_values?: ProgramListCustomFieldValue[] | Record<string, unknown>;
   own_version_count?: number;
   own_file_count?: number;
+  // mapping_info 只在列表/候选接口中作为轻量摘要返回，用于判断是否已经作为子程序映射。
   mapping_info?: {
     mapping_id: number;
     parent_program_id: number;

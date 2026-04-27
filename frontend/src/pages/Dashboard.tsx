@@ -268,7 +268,7 @@ const Dashboard = () => {
     [previewFilter, productionLines],
   );
 
-  // 矩阵预览相关函数
+  // 矩阵预览相关函数：使用 Map 做单元格索引，避免车型 * 产线矩阵渲染时反复遍历 programs。
   const programByCell = useMemo(() => {
     const nextProgramByCell = new Map<string, any>();
     programs.forEach((program: any) => {
@@ -284,6 +284,7 @@ const Dashboard = () => {
     return programByCell.get(`${modelId}:${lineId}`);
   };
 
+  // 车型完成率和产线完成率提前缓存，表头/单元格渲染时只读 Map。
   const modelCompletionRates = useMemo(() => {
     const rates = new Map<number, number>();
     const totalLines = filteredLines.length;

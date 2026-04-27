@@ -3,6 +3,7 @@ import axios from 'axios';
 const API_BASE_URL =
   (import.meta as any).env.VITE_API_URL || '/api';
 
+// 全局 API 实例：业务代码统一通过这里发请求，便于集中处理 token、超时和 401 跳转。
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 10000,
@@ -11,6 +12,8 @@ const api = axios.create({
   },
 });
 
+// 将 axios config 中可能出现的绝对/相对 URL 统一成后端 API 路径。
+// 目前主要用于区分登录接口 401 和其他接口 401。
 const normalizeApiPath = (url?: string) => {
   if (!url) {
     return '';
@@ -37,7 +40,8 @@ export const shouldRedirectToLoginOnUnauthorized = (error: any) => {
   return window.location.pathname !== '/login';
 };
 
-// Request interceptor to add auth token
+// 请求拦截器：自动附加 JWT。
+// 文件上传由浏览器自行设置 multipart boundary，因此 Content-Type 未显式设置时不限制超时。
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
@@ -55,7 +59,7 @@ api.interceptors.request.use(
   },
 );
 
-// Response interceptor to handle errors
+// 响应拦截器：非登录接口收到 401 时清空本地登录态并回到登录页。
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -70,6 +74,7 @@ api.interceptors.response.use(
   },
 );
 
+// 兼容历史数组响应和分页响应，列表页统一用这个函数读取 items。
 export const extractListData = <T = any>(payload: any): T[] => {
   if (Array.isArray(payload)) {
     return payload as T[];
@@ -80,6 +85,7 @@ export const extractListData = <T = any>(payload: any): T[] => {
   return [];
 };
 
+// 兼容历史数组响应和分页响应，列表页统一用这个函数读取分页元信息。
 export const extractPagedListData = <T = any>(payload: any) => {
   const items = extractListData<T>(payload);
   return {

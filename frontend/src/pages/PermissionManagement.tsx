@@ -92,6 +92,7 @@ const snapshotPermissionBits = (
   override: Boolean(row.override),
 });
 
+// dirty 判断同时比较权限位和覆盖模式，避免“继承/显式覆盖”的语义丢失。
 const isMatrixRowDirty = (row: PermissionMatrixItem) => {
   if (!row.original) {
     return false;
@@ -102,6 +103,7 @@ const isMatrixRowDirty = (row: PermissionMatrixItem) => {
   );
 };
 
+// 后端返回后立即记录原始快照，后续保存只提交真正被管理员改过的行。
 const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
   rows.map((row) => {
     const normalizedRow = {
@@ -115,6 +117,7 @@ const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
     };
   });
 
+// 保存矩阵时只提交脏行，避免把继承权限批量固化为显式覆盖。
 const toMatrixPayload = (
   rows: PermissionMatrixItem[],
   supportsOverrideMode = false,
@@ -276,6 +279,7 @@ const PermissionManagement = () => {
     bit: PermissionBit,
     checked: boolean,
   ) => {
+    // 修改任一权限位即进入“显式覆盖”模式，四个权限全 false 表示显式拒绝。
     setRows((rows) =>
       rows.map((row) => {
         if (row.production_line_id !== productionLineID) {
@@ -292,6 +296,7 @@ const PermissionManagement = () => {
     productionLineID: number,
     checked: boolean,
   ) => {
+    // 关闭覆盖表示回到继承，保存时会带 inherit=true 让后端清除显式配置。
     setRows((rows) =>
       rows.map((row) => {
         if (row.production_line_id !== productionLineID) {
@@ -321,6 +326,7 @@ const PermissionManagement = () => {
   ) => {
     setSaving(true);
     try {
+      // supportsOverrideMode 只用于用户/部门矩阵；默认权限矩阵仍按传统空权限删除处理。
       await api.put(url, toMatrixPayload(rows, supportsOverrideMode));
       message.success('权限矩阵已保存');
       reload();

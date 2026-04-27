@@ -28,6 +28,7 @@ type resolvedLinePermission struct {
 	Source           string
 }
 
+// authorizeOwnerOrAdmin 用于“本人可访问、管理员可访问”的账号级接口。
 func authorizeOwnerOrAdmin(c *gin.Context, targetUserID uint) bool {
 	roleValue, roleExists := c.Get("user_role")
 	if roleExists {
@@ -53,6 +54,8 @@ func authorizeOwnerOrAdmin(c *gin.Context, targetUserID uint) bool {
 	return true
 }
 
+// authorizeProgramAction 将程序级操作转换为产线权限判断。
+// 程序本身不直接存权限，所有业务授权都回到 ProductionLineID。
 func authorizeProgramAction(c *gin.Context, tx *gorm.DB, programID uint, action linePermissionAction) bool {
 	var program models.Program
 	if err := tx.Select("id", "production_line_id").First(&program, programID).Error; err != nil {
@@ -66,6 +69,8 @@ func authorizeProgramAction(c *gin.Context, tx *gorm.DB, programID uint, action 
 	return authorizeLineAction(c, program.ProductionLineID, action)
 }
 
+// checkLineAction 返回可直接用于接口响应的授权结果。
+// 管理员短路通过；普通用户按用户/部门/默认权限链解析。
 func checkLineAction(c *gin.Context, productionLineID uint, action linePermissionAction) (bool, int, string) {
 	roleValue, roleExists := c.Get("user_role")
 	if roleExists {
@@ -101,6 +106,8 @@ func checkLineAction(c *gin.Context, productionLineID uint, action linePermissio
 	return true, 0, ""
 }
 
+// resolveAuthorizedLineIDs 返回当前用户可访问的产线集合。
+// 管理员返回 nil 表示不需要追加产线过滤条件。
 func resolveAuthorizedLineIDs(c *gin.Context, action linePermissionAction) (map[uint]struct{}, int, string) {
 	roleValue, roleExists := c.Get("user_role")
 	if roleExists {
@@ -153,6 +160,8 @@ func resolveUserLinePermission(user models.User, productionLineID uint) (resolve
 	return permissions[0], nil
 }
 
+// resolveUserLinePermissions 是权限继承的唯一汇总入口。
+// 优先级：用户显式覆盖 > 部门显式权限 > 角色默认权限 > 部门默认权限 > 无权限。
 func resolveUserLinePermissions(user models.User, productionLines []models.ProductionLine) ([]resolvedLinePermission, error) {
 	lineIDs := make([]uint, 0, len(productionLines))
 	for _, line := range productionLines {

@@ -17,6 +17,8 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// AuthMiddleware 校验 Bearer JWT，并把 user_id/user_role/user 写入 Gin Context。
+// 每次请求都会重新读取用户状态，确保禁用账号或角色变更能及时生效。
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -70,6 +72,8 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+// AdminMiddleware 只依赖 AuthMiddleware 写入的 user_role。
+// 使用时应放在受保护路由之后，不能单独挂在公共路由上。
 func AdminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("user_role")

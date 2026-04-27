@@ -17,6 +17,7 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
+	// CORS 只允许配置中的前端来源，避免携带凭据的跨域请求被任意站点调用。
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     config.AppConfig.CORS.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -25,11 +26,13 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
+	// 公共接口：只放无需登录即可访问的能力。
 	public := r.Group("/api")
 	{
 		public.POST("/login", controllers.Login)
 	}
 
+	// 受保护接口：先经过 JWT 鉴权，再按路由细分管理员权限或产线权限。
 	protected := r.Group("/api")
 	protected.Use(middleware.AuthMiddleware())
 	{
@@ -97,6 +100,8 @@ func SetupRouter() *gin.Engine {
 			files.DELETE("/:id", controllers.DeleteFile)
 		}
 
+		// 用户权限：包含传统明细接口和矩阵接口。
+		// 矩阵接口支持“继承/显式覆盖”，用于精确配置用户在每条产线上的最终覆盖规则。
 		permissions := protected.Group("/permissions")
 		{
 			permissions.GET("", middleware.AdminMiddleware(), controllers.GetPermissions)
@@ -109,6 +114,7 @@ func SetupRouter() *gin.Engine {
 			permissions.GET("/user/:user_id/effective", controllers.GetUserEffectivePermissions)
 		}
 
+		// 部门权限：管理员维护部门对产线的显式授权，供部门成员继承。
 		deptPermissions := protected.Group("/department-permissions")
 		deptPermissions.Use(middleware.AdminMiddleware())
 		{
@@ -120,6 +126,7 @@ func SetupRouter() *gin.Engine {
 			deptPermissions.PUT("/department/:department_id/matrix", controllers.SaveDepartmentPermissionMatrix)
 		}
 
+		// 默认权限：角色默认和部门默认只作为兜底来源，低于用户/部门显式覆盖。
 		permissionDefaults := protected.Group("/permission-defaults")
 		permissionDefaults.Use(middleware.AdminMiddleware())
 		{
@@ -197,6 +204,8 @@ func registerFrontendRoutes(r *gin.Engine) {
 		return
 	}
 
+	// 部署模式下由后端托管前端 dist：
+	// API 和 uploads 仍返回 404，其他 GET 路径回退到 index.html 支持 SPA 路由刷新。
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet {
 			c.Status(http.StatusNotFound)

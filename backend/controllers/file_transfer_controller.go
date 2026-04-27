@@ -18,6 +18,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// buildStoredUploadFile 生成安全且不重复的物理存储路径。
+// 展示文件名保留用户原始语义，落盘文件名必须避免路径穿越和历史文件覆盖。
 func buildStoredUploadFile(programPath, uploadDir, originalName string, reserved map[string]struct{}) (string, string, error) {
 	displayName := utils.SanitizeFilename(filepath.Base(originalName))
 	ext := filepath.Ext(displayName)
@@ -48,6 +50,8 @@ func buildStoredUploadFile(programPath, uploadDir, originalName string, reserved
 	}
 }
 
+// UploadFile 负责普通上传、版本记录和当前版本切换。
+// 数据库事务失败时会清理本次已落盘文件，避免出现孤儿文件。
 func UploadFile(c *gin.Context) {
 	uploadDir := utils.UploadDir()
 	if err := utils.EnsureDirectoryExists(uploadDir); err != nil {

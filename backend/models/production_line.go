@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// ProductionLine 是权限控制和程序归属的核心业务边界。
+// 多数程序、文件和矩阵权限最终都会落到生产线维度做授权判断。
 type ProductionLine struct {
 	ID          uint           `gorm:"primarykey" json:"id"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -24,6 +26,8 @@ type ProductionLine struct {
 	CustomFieldTemplates []ProductionLineCustomField `json:"custom_field_templates,omitempty"`
 }
 
+// Process 表示工序分组，用于组织生产线。
+// 删除工序前需要确保没有生产线仍依赖它。
 type Process struct {
 	ID          uint           `gorm:"primarykey" json:"id"`
 	CreatedAt   time.Time      `json:"created_at"`

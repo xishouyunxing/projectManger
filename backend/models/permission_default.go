@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// RoleDefaultPermission 是角色级默认权限。
+// 它只在用户和部门都没有显式配置时参与权限解析，适合定义普通角色的基础可见范围。
 type RoleDefaultPermission struct {
 	ID               uint           `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time      `json:"created_at"`
@@ -21,6 +23,8 @@ type RoleDefaultPermission struct {
 	ProductionLine ProductionLine `json:"production_line,omitempty"`
 }
 
+// DepartmentDefaultPermission 是部门级默认权限。
+// 它用于给部门成员提供兜底权限，不应覆盖用户或部门的显式授权/拒绝。
 type DepartmentDefaultPermission struct {
 	ID               uint           `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time      `json:"created_at"`

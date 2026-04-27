@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// DepartmentPermission 表示部门对产线的显式授权。
+// 用户没有个人覆盖时，会通过所属部门继承这里的权限。
 type DepartmentPermission struct {
 	ID               uint           `gorm:"primarykey" json:"id"`
 	CreatedAt        time.Time      `json:"created_at"`
