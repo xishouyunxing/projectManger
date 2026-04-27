@@ -27,6 +27,10 @@ const { Title } = Typography;
 type PermissionBit = 'can_view' | 'can_download' | 'can_upload' | 'can_manage';
 
 type PermissionBitsSnapshot = Record<PermissionBit, boolean>;
+
+// 权限矩阵存在三层状态：权限位、是否显式覆盖、以及原始快照。
+// 原始快照不能只记录四个权限位，否则“全 false 的继承”和“全 false 的显式拒绝”
+// 会被前端视为同一种状态，保存时就无法准确表达管理员意图。
 type PermissionMatrixSnapshot = PermissionBitsSnapshot & { override: boolean };
 
 type PermissionMatrixItem = {
@@ -36,9 +40,15 @@ type PermissionMatrixItem = {
   can_download: boolean;
   can_upload: boolean;
   can_manage: boolean;
+  // source 描述当前有效权限来自哪里，仅用于展示和初始化 override。
+  // 用户/部门矩阵里 source=none 表示没有显式配置，最终权限还可能来自上级继承。
   source?: string;
+  // override=true 表示保存为显式配置；override=false 表示回到继承。
+  // 注意：override=true 且四个权限位全 false 是“显式拒绝”，不能被当成空行删除。
   override?: boolean;
+  // dirty 表示本行是否需要提交给后端。矩阵页只提交脏行，防止整表保存污染继承关系。
   dirty?: boolean;
+  // original 是后端返回时的稳定快照，用于判断管理员是否真的改过这行。
   original?: PermissionMatrixSnapshot;
 };
 
@@ -93,6 +103,11 @@ const snapshotPermissionBits = (
 });
 
 // dirty 判断同时比较权限位和覆盖模式，避免“继承/显式覆盖”的语义丢失。
+//
+// 这个函数刻意不根据当前值是否“有任一权限为 true”来判断脏行：
+// 1. 全 false + override=false 表示继续继承，通常不应写库；
+// 2. 全 false + override=true 表示管理员明确拒绝，应写成显式覆盖；
+// 3. true/false 权限位不变但 override 从 true 切回 false，表示清除覆盖，也必须提交。
 const isMatrixRowDirty = (row: PermissionMatrixItem) => {
   if (!row.original) {
     return false;
@@ -104,6 +119,9 @@ const isMatrixRowDirty = (row: PermissionMatrixItem) => {
 };
 
 // 后端返回后立即记录原始快照，后续保存只提交真正被管理员改过的行。
+//
+// row.override 是新接口返回的显式覆盖标记；为了兼容旧数据或默认权限接口，
+// 这里会用 source 初始化 override。默认权限矩阵没有继承链，source=none 可以按空配置处理。
 const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
   rows.map((row) => {
     const normalizedRow = {
@@ -118,6 +136,15 @@ const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
   });
 
 // 保存矩阵时只提交脏行，避免把继承权限批量固化为显式覆盖。
+//
+// 审查中指出的风险正来自“整表提交”：如果把后端返回的每一行都发回去，
+// 当前来自 role_default、department_default 或 none 的行会被误写成用户/部门显式覆盖，
+// 后续调整默认权限时这些行就不会再跟随变化。
+//
+// supportsOverrideMode 只给用户/部门矩阵打开：
+// - override=false 会生成 inherit=true，后端删除显式覆盖，让权限重新按继承链解析；
+// - override=true 会生成 inherit=false，后端 upsert 显式覆盖；
+// - override=true 且四个权限位全 false 是合法的显式拒绝。
 const toMatrixPayload = (
   rows: PermissionMatrixItem[],
   supportsOverrideMode = false,

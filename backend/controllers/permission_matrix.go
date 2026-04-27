@@ -35,6 +35,9 @@ type savePermissionMatrixRequest struct {
 
 // savePermissionMatrixItem 是矩阵保存的最小变更单元。
 // Inherit=true 表示清除显式覆盖并回到继承；Inherit=false 表示写入显式覆盖，四个权限位全 false 也必须保留为“显式拒绝”。
+//
+// 前端只会提交被管理员改过的行，后端也按“增量补丁”处理这里的数组。
+// 不要把未提交的产线理解为 false 或删除，否则会把继承权限批量改写成显式配置。
 type savePermissionMatrixItem struct {
 	ProductionLineID uint `json:"production_line_id" binding:"required"`
 	CanView          bool `json:"can_view"`
@@ -87,6 +90,11 @@ func GetUserPermissionMatrix(c *gin.Context) {
 
 // SaveUserPermissionMatrix 只处理前端提交的脏行。
 // 这样可以避免把未修改的继承权限固化成用户显式覆盖。
+//
+// 用户显式权限优先级最高，因此保存语义必须能区分三种状态：
+// 1. 不提交该产线：保持现状；
+// 2. inherit=true：删除用户显式覆盖，重新回落到部门、角色默认或部门默认；
+// 3. inherit=false：写入用户显式覆盖，即使四个权限位全 false 也代表明确拒绝。
 func SaveUserPermissionMatrix(c *gin.Context) {
 	userID, err := parseUintParam(c.Param("user_id"))
 	if err != nil {
@@ -110,12 +118,16 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
+			// inherit 是“清除覆盖”的操作，不是把权限位保存为 false。
+			// 删除显式记录后，最终授权结果会由下级继承链重新计算。
 			if item.Inherit {
 				if err := tx.Unscoped().Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).Delete(&models.UserPermission{}).Error; err != nil {
 					return err
 				}
 				continue
 			}
+			// 非 inherit 的请求始终保存为显式覆盖。
+			// permissionMatrixItemEmpty 在用户矩阵中不能用于删除，否则会破坏“显式拒绝”。
 			if err := upsertUserPermissionOverride(tx, userID, item); err != nil {
 				return err
 			}
@@ -169,6 +181,9 @@ func GetDepartmentPermissionMatrix(c *gin.Context) {
 }
 
 // SaveDepartmentPermissionMatrix 与用户矩阵一致：Inherit 清除部门覆盖，否则写入显式覆盖。
+//
+// 部门显式权限会影响部门内所有未被用户显式覆盖的账号，因此同样需要保留全 false 的显式拒绝。
+// 只有 inherit=true 才允许删除部门覆盖，普通全 false 保存必须落库。
 func SaveDepartmentPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
@@ -192,12 +207,14 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Permissions {
+			// 清除部门覆盖后，最终授权会继续回落到角色默认或部门默认权限。
 			if item.Inherit {
 				if err := tx.Unscoped().Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).Delete(&models.DepartmentPermission{}).Error; err != nil {
 					return err
 				}
 				continue
 			}
+			// 全 false 仍然是部门级显式拒绝，不能复用默认权限矩阵的“空权限删除”逻辑。
 			if err := upsertDepartmentPermissionOverride(tx, departmentID, item); err != nil {
 				return err
 			}
@@ -399,6 +416,9 @@ func loadPermissionMatrixLines() ([]models.ProductionLine, error) {
 
 // buildPermissionMatrixItems 为前端统一补齐所有产线行。
 // Override 表示该行当前是否来自显式配置；前端据此展示“继承/覆盖”模式。
+//
+// Source 用于告诉前端权限来源，Override 用于告诉前端是否允许清除覆盖。
+// source=none 的行不代表最终无权限，只代表当前矩阵层级没有配置，最终权限可能由更低优先级来源决定。
 func buildPermissionMatrixItems(lines []models.ProductionLine, resolve func(uint) (bool, bool, bool, bool, string)) []permissionMatrixItem {
 	items := make([]permissionMatrixItem, 0, len(lines))
 	for _, line := range lines {
@@ -488,6 +508,8 @@ func permissionMatrixItemEmpty(item savePermissionMatrixItem) bool {
 	return !item.CanView && !item.CanDownload && !item.CanUpload && !item.CanManage
 }
 
+// permissionMatrixUpdates 只生成四个权限位的更新内容。
+// 是否删除覆盖由调用方通过 Inherit 决定，不能在这里根据全 false 自动删除。
 func permissionMatrixUpdates(item savePermissionMatrixItem) map[string]any {
 	return map[string]any{
 		"can_view":     item.CanView,
@@ -497,6 +519,9 @@ func permissionMatrixUpdates(item savePermissionMatrixItem) map[string]any {
 	}
 }
 
+// upsertUserPermissionOverride 保存用户层显式覆盖。
+// 这里先 Count 再 Updates/Create，是为了兼容当前模型的软删除和唯一约束迁移状态；
+// 即使 item 四个权限位全 false，也必须写入或更新记录来表达显式拒绝。
 func upsertUserPermissionOverride(tx *gorm.DB, userID uint, item savePermissionMatrixItem) error {
 	updates := permissionMatrixUpdates(item)
 	var count int64
@@ -516,6 +541,8 @@ func upsertUserPermissionOverride(tx *gorm.DB, userID uint, item savePermissionM
 	return tx.Model(&models.UserPermission{}).Create(updates).Error
 }
 
+// upsertDepartmentPermissionOverride 保存部门层显式覆盖，语义与用户覆盖一致。
+// 默认权限矩阵可以把空权限视为删除，但部门覆盖不能这样做，否则无法阻断继承权限。
 func upsertDepartmentPermissionOverride(tx *gorm.DB, departmentID uint, item savePermissionMatrixItem) error {
 	updates := permissionMatrixUpdates(item)
 	var count int64
