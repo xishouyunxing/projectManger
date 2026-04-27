@@ -1,7 +1,7 @@
-# 起重机生产线程序管理系统
+# 文件版本管理控制系统
 
 <p align="center">
-  <strong>面向离线编程与产线程序交付的企业级管理平台</strong>
+  <strong>面向离线编程与产线程序交付的管理平台</strong>
 </p>
 
 <p align="center">
