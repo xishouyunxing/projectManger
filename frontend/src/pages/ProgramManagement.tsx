@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TablePaginationConfig } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -160,6 +160,8 @@ const ProgramManagement = () => {
   const [addRelationModalVisible, setAddRelationModalVisible] = useState(false);
   const [relationForm] = Form.useForm();
   const [mappingSearchKeyword, setMappingSearchKeyword] = useState('');
+  const [debouncedMappingSearchKeyword, setDebouncedMappingSearchKeyword] =
+    useState('');
   const [mappingFilterProductionLine, setMappingFilterProductionLine] =
     useState<number | null>(null);
   const [mappingFilterVehicleModel, setMappingFilterVehicleModel] = useState<
@@ -192,10 +194,19 @@ const ProgramManagement = () => {
     setSearchKeyword(searchInputValue.trim());
   };
 
-  const availableMappingCandidatePrograms = mappingCandidatePrograms
-    .filter((p) => p.id !== currentProgram?.id)
-    .filter((p) => !p.mapping_info)
-    .filter((p) => !relatedPrograms.some((rp) => rp.child_program.id === p.id));
+  const relatedProgramIds = useMemo(
+    () => new Set(relatedPrograms.map((rp) => rp.child_program.id)),
+    [relatedPrograms],
+  );
+
+  const availableMappingCandidatePrograms = useMemo(
+    () =>
+      mappingCandidatePrograms
+        .filter((p) => p.id !== currentProgram?.id)
+        .filter((p) => !p.mapping_info)
+        .filter((p) => !relatedProgramIds.has(p.id)),
+    [currentProgram?.id, mappingCandidatePrograms, relatedProgramIds],
+  );
 
   const handleFilterProductionLineChange = async (value?: number) => {
     const nextValue = value ?? null;
@@ -244,6 +255,16 @@ const ProgramManagement = () => {
   }, [searchInputValue]);
 
   useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedMappingSearchKeyword(mappingSearchKeyword.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [mappingSearchKeyword]);
+
+  useEffect(() => {
     if (!addRelationModalVisible || !currentProgram) {
       setMappingCandidatePrograms([]);
       return;
@@ -254,7 +275,9 @@ const ProgramManagement = () => {
       try {
         const response = await api.get('/programs', {
           params: {
-            keyword: mappingSearchKeyword || undefined,
+            page: 1,
+            page_size: 50,
+            keyword: debouncedMappingSearchKeyword || undefined,
             production_line_id: mappingFilterProductionLine || undefined,
             vehicle_model_id: mappingFilterVehicleModel || undefined,
             status: mappingFilterStatus || undefined,
@@ -283,7 +306,7 @@ const ProgramManagement = () => {
   }, [
     addRelationModalVisible,
     currentProgram,
-    mappingSearchKeyword,
+    debouncedMappingSearchKeyword,
     mappingFilterProductionLine,
     mappingFilterVehicleModel,
     mappingFilterStatus,
@@ -394,6 +417,7 @@ const ProgramManagement = () => {
       setAddRelationModalVisible(false);
       relationForm.resetFields();
       setMappingSearchKeyword('');
+      setDebouncedMappingSearchKeyword('');
       setMappingFilterProductionLine(null);
       setMappingFilterVehicleModel(null);
       setMappingFilterStatus(null);
@@ -2722,6 +2746,7 @@ const ProgramManagement = () => {
           setAddRelationModalVisible(false);
           relationForm.resetFields();
           setMappingSearchKeyword('');
+          setDebouncedMappingSearchKeyword('');
           setMappingFilterProductionLine(null);
           setMappingFilterVehicleModel(null);
           setMappingFilterStatus(null);

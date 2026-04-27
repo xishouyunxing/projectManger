@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Table,
   Button,
@@ -42,11 +42,33 @@ const VehicleModelManagement = () => {
 
   // 筛选相关状态
   const [filterSeries, setFilterSeries] = useState<string | null>(null);
+  const [searchInputValue, setSearchInputValue] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [filterDateRange, setFilterDateRange] = useState<[string | null, string | null]>([null, null]);
 
   // 获取所有系列（去重）
-  const allSeries = [...new Set(vehicleModels.map((m: any) => m.series).filter(Boolean))];
+  const allSeries = useMemo(
+    () => [...new Set(vehicleModels.map((m: any) => m.series).filter(Boolean))],
+    [vehicleModels],
+  );
+
+  const programsByProductionLine = useMemo(() => {
+    const groupedPrograms = new Map<number, any[]>();
+    programs.forEach((program: any) => {
+      const linePrograms = groupedPrograms.get(program.production_line_id) || [];
+      linePrograms.push(program);
+      groupedPrograms.set(program.production_line_id, linePrograms);
+    });
+    return groupedPrograms;
+  }, [programs]);
+
+  const visibleProgramLines = useMemo(
+    () =>
+      productionLines.filter((line: any) =>
+        programsByProductionLine.has(line.id),
+      ),
+    [productionLines, programsByProductionLine],
+  );
 
   // 筛选后的车型列表
   
@@ -54,8 +76,13 @@ const VehicleModelManagement = () => {
   // 重置筛选
   const handleResetFilter = () => {
     setFilterSeries(null);
+    setSearchInputValue('');
     setSearchKeyword('');
     setFilterDateRange([null, null]);
+  };
+
+  const applySearchKeyword = () => {
+    setSearchKeyword(searchInputValue.trim());
   };
 
   useEffect(() => {
@@ -63,25 +90,41 @@ const VehicleModelManagement = () => {
   }, [searchKeyword, filterSeries, filterDateRange]);
 
   useEffect(() => {
-    loadData();
+    const timeoutId = window.setTimeout(() => {
+      setSearchKeyword(searchInputValue.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchInputValue]);
+
+  useEffect(() => {
+    loadProductionLines();
   }, []);
+
+  const loadProductionLines = async () => {
+    try {
+      const linesRes = await api.get('/production-lines');
+      setProductionLines(extractListData(linesRes.data));
+    } catch (error) {
+      console.error('Failed to load production lines:', error);
+    }
+  };
 
   const loadData = async (page = tablePagination.current, pageSize = tablePagination.pageSize) => {
     setLoading(true);
     try {
-      const [modelsRes, linesRes] = await Promise.all([
-        api.get('/vehicle-models', {
-          params: {
-            page,
-            page_size: pageSize,
-            ...(searchKeyword ? { keyword: searchKeyword } : {}),
-            ...(filterSeries ? { series: filterSeries } : {}),
-            ...(filterDateRange[0] ? { date_from: filterDateRange[0] } : {}),
-            ...(filterDateRange[1] ? { date_to: filterDateRange[1] } : {}),
-          },
-        }),
-        api.get('/production-lines'),
-      ]);
+      const modelsRes = await api.get('/vehicle-models', {
+        params: {
+          page,
+          page_size: pageSize,
+          ...(searchKeyword ? { keyword: searchKeyword } : {}),
+          ...(filterSeries ? { series: filterSeries } : {}),
+          ...(filterDateRange[0] ? { date_from: filterDateRange[0] } : {}),
+          ...(filterDateRange[1] ? { date_to: filterDateRange[1] } : {}),
+        },
+      });
       const modelsPaged = extractPagedListData(modelsRes.data);
       const fallbackToPreviousPage = page > 1 && modelsPaged.items.length === 0;
       if (fallbackToPreviousPage) {
@@ -94,7 +137,6 @@ const VehicleModelManagement = () => {
         pageSize: modelsPaged.pageSize || pageSize,
         total: modelsPaged.total,
       });
-      setProductionLines(extractListData(linesRes.data));
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -318,8 +360,8 @@ const VehicleModelManagement = () => {
             <div className="management-filter-label">车型名称/编号</div>
             <Input 
               placeholder="搜索参数..." 
-              value={searchKeyword} 
-              onChange={(e) => setSearchKeyword(e.target.value)}
+              value={searchInputValue}
+              onChange={(e) => setSearchInputValue(e.target.value)}
             />
           </div>
           <div className="management-filter-field">
@@ -349,7 +391,7 @@ const VehicleModelManagement = () => {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <Button 
-              onClick={() => {}}
+              onClick={applySearchKeyword}
               icon={<SearchOutlined />}
               style={{ height: '40px', width: '115px', borderRadius: '8px', background: '#DEE3E6', color: '#2D3335', fontWeight: 700, border: 'none' }}
             >
@@ -439,10 +481,9 @@ const VehicleModelManagement = () => {
                 <Empty description="暂无程序数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
               </div>
             ) : (
-              productionLines
-                .filter((line: any) => programs.some((p: any) => p.production_line_id === line.id))
+              visibleProgramLines
                 .map((line: any) => {
-                  const linePrograms = programs.filter((p: any) => p.production_line_id === line.id);
+                  const linePrograms = programsByProductionLine.get(line.id) || [];
                   const isCollapsed = collapsedLines.includes(line.id);
 
                   return (

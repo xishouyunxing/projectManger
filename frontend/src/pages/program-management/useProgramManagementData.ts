@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
 import api from '../../services/api';
 import { buildEnabledCustomFields, normalizeCustomFieldValues } from './utils';
@@ -60,31 +60,21 @@ export const useProgramManagementData = ({
           .map(([fieldId, value]) => [`custom_field_${fieldId}`, value]),
       );
 
-      const [programsRes, linesRes, modelsRes] = await Promise.all([
-        api.get('/programs', {
-          params: {
-            page: programPage,
-            page_size: programPageSize,
-            keyword: searchKeyword || undefined,
-            production_line_id: filterProductionLine || undefined,
-            vehicle_model_id: filterVehicleModel || undefined,
-            status: filterStatus || undefined,
-            date_from: filterDateRange[0] || undefined,
-            date_to: filterDateRange[1] || undefined,
-            ...customFieldParams,
-          },
-        }),
-        api.get('/production-lines'),
-        api.get('/vehicle-models', {
-          params: {
-            scope: 'selector',
-          },
-        }),
-      ]);
+      const programsRes = await api.get('/programs', {
+        params: {
+          page: programPage,
+          page_size: programPageSize,
+          keyword: searchKeyword || undefined,
+          production_line_id: filterProductionLine || undefined,
+          vehicle_model_id: filterVehicleModel || undefined,
+          status: filterStatus || undefined,
+          date_from: filterDateRange[0] || undefined,
+          date_to: filterDateRange[1] || undefined,
+          ...customFieldParams,
+        },
+      });
       setPrograms(programsRes.data?.items || programsRes.data || []);
       setProgramTotal(Number(programsRes.data?.total) || 0);
-      setProductionLines(linesRes.data);
-      setVehicleModels(modelsRes.data);
     } catch (error) {
       console.error('Failed to load data:', error);
       message.error('加载数据失败，请刷新重试');
@@ -121,6 +111,24 @@ export const useProgramManagementData = ({
     return buildEnabledCustomFields(response.data);
   };
 
+  const loadSelectorData = async () => {
+    try {
+      const [linesRes, modelsRes] = await Promise.all([
+        api.get('/production-lines'),
+        api.get('/vehicle-models', {
+          params: {
+            scope: 'selector',
+          },
+        }),
+      ]);
+      setProductionLines(linesRes.data);
+      setVehicleModels(modelsRes.data);
+    } catch (error) {
+      console.error('Failed to load selector data:', error);
+      message.error('加载筛选数据失败，请刷新重试');
+    }
+  };
+
   useEffect(() => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -135,9 +143,13 @@ export const useProgramManagementData = ({
     customFieldFilterValues,
   ]);
 
-  const filteredPrograms = programs
-    .filter((a) => Boolean(a))
-    .sort((a, b) => {
+  useEffect(() => {
+    void loadSelectorData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filteredPrograms = useMemo(() => {
+    return programs.filter((a) => Boolean(a)).sort((a, b) => {
       if (selectedProgramId) {
         if (a.id === selectedProgramId) return -1;
         if (b.id === selectedProgramId) return 1;
@@ -152,6 +164,7 @@ export const useProgramManagementData = ({
 
       return 0;
     });
+  }, [programs, selectedProgramId, userId]);
 
   return {
     programs,

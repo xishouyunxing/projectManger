@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Card,
   Row,
@@ -160,7 +160,6 @@ const Dashboard = () => {
   useEffect(() => {
     loadStats();
     loadRecentActivities();
-    loadProgramsPreview();
   }, []);
 
   const loadStats = async () => {
@@ -172,27 +171,23 @@ const Dashboard = () => {
         api.get('/vehicle-models'),
       ]);
 
+      const programItems = Array.isArray(programs.data)
+        ? programs.data
+        : programs.data?.items || [];
+
       setStats({
-        programs: programs.data.length,
+        programs: Number(programs.data?.total) || programItems.length,
         users: users.data.length,
         productionLines: lines.data.length,
         vehicleModels: models.data.length,
       });
+      setPrograms(programItems);
       setProductionLines(lines.data);
       setVehicleModels(models.data);
     } catch (error) {
       console.error('Failed to load stats:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadProgramsPreview = async () => {
-    try {
-      const response = await api.get('/programs');
-      setPrograms(response.data);
-    } catch (error) {
-      console.error('Failed to load programs:', error);
     }
   };
 
@@ -265,34 +260,69 @@ const Dashboard = () => {
       : []),
   ];
 
+  const filteredLines = useMemo(
+    () =>
+      previewFilter
+        ? productionLines.filter((line: any) => line.id === previewFilter)
+        : productionLines,
+    [previewFilter, productionLines],
+  );
+
   // 矩阵预览相关函数
+  const programByCell = useMemo(() => {
+    const nextProgramByCell = new Map<string, any>();
+    programs.forEach((program: any) => {
+      nextProgramByCell.set(
+        `${program.vehicle_model_id}:${program.production_line_id}`,
+        program,
+      );
+    });
+    return nextProgramByCell;
+  }, [programs]);
+
   const getProgramForCell = (modelId: number, lineId: number) => {
-    return programs.find(
-      (p: any) => p.vehicle_model_id === modelId && p.production_line_id === lineId
-    );
+    return programByCell.get(`${modelId}:${lineId}`);
   };
 
-  const getModelCompletionRate = (modelId: number) => {
+  const modelCompletionRates = useMemo(() => {
+    const rates = new Map<number, number>();
     const totalLines = filteredLines.length;
-    if (totalLines === 0) return 0;
-    const completedLines = filteredLines.filter((line: any) =>
-      getProgramForCell(modelId, line.id)
-    ).length;
-    return Math.round((completedLines / totalLines) * 100);
+    vehicleModels.forEach((model: any) => {
+      if (totalLines === 0) {
+        rates.set(model.id, 0);
+        return;
+      }
+      const completedLines = filteredLines.filter((line: any) =>
+        programByCell.has(`${model.id}:${line.id}`),
+      ).length;
+      rates.set(model.id, Math.round((completedLines / totalLines) * 100));
+    });
+    return rates;
+  }, [filteredLines, programByCell, vehicleModels]);
+
+  const lineCompletionRates = useMemo(() => {
+    const rates = new Map<number, number>();
+    const totalModels = vehicleModels.length;
+    filteredLines.forEach((line: any) => {
+      if (totalModels === 0) {
+        rates.set(line.id, 0);
+        return;
+      }
+      const completedModels = vehicleModels.filter((model: any) =>
+        programByCell.has(`${model.id}:${line.id}`),
+      ).length;
+      rates.set(line.id, Math.round((completedModels / totalModels) * 100));
+    });
+    return rates;
+  }, [filteredLines, programByCell, vehicleModels]);
+
+  const getModelCompletionRate = (modelId: number) => {
+    return modelCompletionRates.get(modelId) || 0;
   };
 
   const getLineCompletionRate = (lineId: number) => {
-    const totalModels = vehicleModels.length;
-    if (totalModels === 0) return 0;
-    const completedModels = vehicleModels.filter((model: any) =>
-      getProgramForCell(model.id, lineId)
-    ).length;
-    return Math.round((completedModels / totalModels) * 100);
+    return lineCompletionRates.get(lineId) || 0;
   };
-
-  const filteredLines = previewFilter
-    ? productionLines.filter((line: any) => line.id === previewFilter)
-    : productionLines;
 
   const renderCell = (modelId: number, lineId: number) => {
     const program = getProgramForCell(modelId, lineId);
