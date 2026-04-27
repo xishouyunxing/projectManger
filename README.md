@@ -421,4 +421,4 @@ npm run format:check
 
 ## License
 
-当前仓库未声明开源许可证。对外发布或分发前，请先补充 LICENSE 文件并明确使用范围。
+本项目使用 [Apache License 2.0](LICENSE) 许可。你可以在遵守许可证条款的前提下使用、修改和分发本项目。
