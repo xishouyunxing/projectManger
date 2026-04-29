@@ -119,3 +119,37 @@ func RequirePermission(permissionCode string) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// RequireAnyPermission 返回一个中间件，要求用户拥有指定权限中的任意一个。
+// 适用于被多个页面共享的 GET 接口（如用户列表被用户管理和权限管理共用）。
+func RequireAnyPermission(permissionCodes ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("user_role")
+		if role == "admin" || role == "system_admin" {
+			c.Next()
+			return
+		}
+
+		userIDVal, exists := c.Get("user_id")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
+			c.Abort()
+			return
+		}
+		userID, ok := userIDVal.(uint)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户ID无效"})
+			c.Abort()
+			return
+		}
+
+		for _, code := range permissionCodes {
+			if services.UserHasPermission(userID, code) {
+				c.Next()
+				return
+			}
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": "权限不足"})
+		c.Abort()
+	}
+}
