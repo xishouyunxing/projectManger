@@ -3,6 +3,7 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"crane-system/services"
 	"errors"
 	"net/http"
 
@@ -216,27 +217,34 @@ func GetUserEffectivePermissions(c *gin.Context) {
 		Source             string `json:"source"`
 	}
 
-	resolvedPermissions, err := resolveUserLinePermissions(user, productionLines)
+	// 使用新的权限服务获取有效权限
+	permData, err := services.GetUserPermissions(user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询权限失败"})
 		return
 	}
 
-	var effectivePermissions []EffectivePermission
 	lineNames := make(map[uint]string, len(productionLines))
 	for _, line := range productionLines {
 		lineNames[line.ID] = line.Name
 	}
-	for _, permission := range resolvedPermissions {
-		effectivePermissions = append(effectivePermissions, EffectivePermission{
-			ProductionLineID:   permission.ProductionLineID,
-			ProductionLineName: lineNames[permission.ProductionLineID],
-			CanView:            permission.CanView,
-			CanDownload:        permission.CanDownload,
-			CanUpload:          permission.CanUpload,
-			CanManage:          permission.CanManage,
-			Source:             permission.Source,
-		})
+
+	var effectivePermissions []EffectivePermission
+	for _, line := range productionLines {
+		ep := EffectivePermission{
+			ProductionLineID:   line.ID,
+			ProductionLineName: line.Name,
+		}
+		if lp, ok := permData.LinePermissions[line.ID]; ok {
+			ep.CanView = lp.CanView
+			ep.CanDownload = lp.CanDownload
+			ep.CanUpload = lp.CanUpload
+			ep.CanManage = lp.CanManage
+			ep.Source = lp.Source
+		} else {
+			ep.Source = "none"
+		}
+		effectivePermissions = append(effectivePermissions, ep)
 	}
 
 	c.JSON(http.StatusOK, effectivePermissions)
