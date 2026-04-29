@@ -1,68 +1,71 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Dispatch, SetStateAction } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
-  ConfigProvider,
+  Checkbox,
+  Modal,
   Select,
   Space,
   Switch,
   Tabs,
   Table,
+  Tag,
   Typography,
   message,
+  Popconfirm,
+  Input,
+  Form,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import {
-  ApartmentOutlined,
+  DeleteOutlined,
+  LockOutlined,
+  PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
-  SafetyCertificateOutlined,
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
-type PermissionBit = 'can_view' | 'can_download' | 'can_upload' | 'can_manage';
+// ---------- 类型定义 ----------
 
-type PermissionBitsSnapshot = Record<PermissionBit, boolean>;
+type Role = {
+  id: number;
+  name: string;
+  description: string;
+  is_preset: boolean;
+  is_system: boolean;
+  status: string;
+  sort_order: number;
+};
 
-// 权限矩阵存在三层状态：权限位、是否显式覆盖、以及原始快照。
-// 原始快照不能只记录四个权限位，否则“全 false 的继承”和“全 false 的显式拒绝”
-// 会被前端视为同一种状态，保存时就无法准确表达管理员意图。
-type PermissionMatrixSnapshot = PermissionBitsSnapshot & { override: boolean };
+type Permission = {
+  id: number;
+  code: string;
+  name: string;
+  type: string;
+  resource: string;
+};
 
-type PermissionMatrixItem = {
+type RoleLinePermItem = {
   production_line_id: number;
   production_line_name: string;
   can_view: boolean;
   can_download: boolean;
   can_upload: boolean;
   can_manage: boolean;
-  // source 描述当前有效权限来自哪里，仅用于展示和初始化 override。
-  // 用户/部门矩阵里 source=none 表示没有显式配置，最终权限还可能来自上级继承。
-  source?: string;
-  // override=true 表示保存为显式配置；override=false 表示回到继承。
-  // 注意：override=true 且四个权限位全 false 是“显式拒绝”，不能被当成空行删除。
-  override?: boolean;
-  // dirty 表示本行是否需要提交给后端。矩阵页只提交脏行，防止整表保存污染继承关系。
-  dirty?: boolean;
-  // original 是后端返回时的稳定快照，用于判断管理员是否真的改过这行。
-  original?: PermissionMatrixSnapshot;
 };
 
 type User = {
   id: number;
   name: string;
-  employee_id?: string;
-  role?: string;
-  department?: { name?: string };
-};
-
-type Department = {
-  id: number;
-  name: string;
+  employee_id: string;
+  role: string;
+  role_id?: number;
+  department?: { id: number; name: string };
 };
 
 type ProductionLine = {
@@ -70,715 +73,791 @@ type ProductionLine = {
   name: string;
 };
 
-const permissionBits: Array<{ key: PermissionBit; label: string }> = [
+type LineAdminAssignment = {
+  id: number;
+  user_id: number;
+  production_line_id: number;
+  user?: User;
+  production_line?: ProductionLine;
+};
+
+type PermissionBit = 'can_view' | 'can_download' | 'can_upload' | 'can_manage';
+
+const permBitConfig: Array<{ key: PermissionBit; label: string }> = [
   { key: 'can_view', label: '查看' },
   { key: 'can_download', label: '下载' },
   { key: 'can_upload', label: '上传' },
   { key: 'can_manage', label: '管理' },
 ];
 
-const sourceLabels: Record<string, string> = {
-  user: '用户',
-  department: '部门',
-  role_default: '角色默认',
-  department_default: '部门默认',
-  none: '无',
+const roleLabels: Record<string, string> = {
+  system_admin: '系统管理员',
+  line_admin: '产线管理员',
+  engineer: '工程师',
+  operator: '操作员',
+  viewer: '访客',
 };
 
-const permissionBitKeys: PermissionBit[] = [
-  'can_view',
-  'can_download',
-  'can_upload',
-  'can_manage',
-];
+// ---------- 主组件 ----------
 
-const snapshotPermissionBits = (
-  row: PermissionMatrixItem,
-): PermissionMatrixSnapshot => ({
-  can_view: row.can_view,
-  can_download: row.can_download,
-  can_upload: row.can_upload,
-  can_manage: row.can_manage,
-  override: Boolean(row.override),
-});
+const PermissionManagement = () => {
+  const { isAdmin } = useAuth();
 
-// dirty 判断同时比较权限位和覆盖模式，避免“继承/显式覆盖”的语义丢失。
-//
-// 这个函数刻意不根据当前值是否“有任一权限为 true”来判断脏行：
-// 1. 全 false + override=false 表示继续继承，通常不应写库；
-// 2. 全 false + override=true 表示管理员明确拒绝，应写成显式覆盖；
-// 3. true/false 权限位不变但 override 从 true 切回 false，表示清除覆盖，也必须提交。
-const isMatrixRowDirty = (row: PermissionMatrixItem) => {
-  if (!row.original) {
-    return false;
-  }
   return (
-    Boolean(row.override) !== row.original.override ||
-    permissionBitKeys.some((key) => row[key] !== row.original?.[key])
+    <div style={{ padding: 0 }}>
+      <Title level={4} style={{ marginBottom: 24 }}>
+        <LockOutlined style={{ marginRight: 8 }} />
+        权限管理
+      </Title>
+      <Tabs
+        defaultActiveKey="roles"
+        items={[
+          {
+            key: 'roles',
+            label: (
+              <span>
+                <TeamOutlined /> 角色管理
+              </span>
+            ),
+            children: <RoleTab />,
+          },
+          {
+            key: 'users',
+            label: (
+              <span>
+                <UserOutlined /> 用户权限
+              </span>
+            ),
+            children: <UserPermTab />,
+          },
+          {
+            key: 'line-admin',
+            label: (
+              <span>
+                <LockOutlined /> 产线管理员
+              </span>
+            ),
+            children: <LineAdminTab />,
+            disabled: !isAdmin,
+          },
+        ]}
+      />
+    </div>
   );
 };
 
-// 后端返回后立即记录原始快照，后续保存只提交真正被管理员改过的行。
-//
-// row.override 是新接口返回的显式覆盖标记；为了兼容旧数据或默认权限接口，
-// 这里会用 source 初始化 override。默认权限矩阵没有继承链，source=none 可以按空配置处理。
-const markMatrixRowsClean = (rows: PermissionMatrixItem[]) =>
-  rows.map((row) => {
-    const normalizedRow = {
-      ...row,
-      override: row.override ?? row.source !== 'none',
-    };
-    return {
-      ...normalizedRow,
-      dirty: false,
-      original: snapshotPermissionBits(normalizedRow),
-    };
-  });
+// ========== Tab 1: 角色管理 ==========
 
-// 保存矩阵时只提交脏行，避免把继承权限批量固化为显式覆盖。
-//
-// 审查中指出的风险正来自“整表提交”：如果把后端返回的每一行都发回去，
-// 当前来自 role_default、department_default 或 none 的行会被误写成用户/部门显式覆盖，
-// 后续调整默认权限时这些行就不会再跟随变化。
-//
-// supportsOverrideMode 只给用户/部门矩阵打开：
-// - override=false 会生成 inherit=true，后端删除显式覆盖，让权限重新按继承链解析；
-// - override=true 会生成 inherit=false，后端 upsert 显式覆盖；
-// - override=true 且四个权限位全 false 是合法的显式拒绝。
-const toMatrixPayload = (
-  rows: PermissionMatrixItem[],
-  supportsOverrideMode = false,
-) => ({
-  permissions: rows
-    .filter((row) => row.dirty)
-    .map((row) => ({
-      production_line_id: row.production_line_id,
-      ...(supportsOverrideMode ? { inherit: !row.override } : {}),
-      can_view: row.can_view,
-      can_download: row.can_download,
-      can_upload: row.can_upload,
-      can_manage: row.can_manage,
-    })),
-});
+const RoleTab = () => {
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
+  const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
+  const [rolePermIDs, setRolePermIDs] = useState<Set<number>>(new Set());
+  const [lineMatrix, setLineMatrix] = useState<RoleLinePermItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createForm] = Form.useForm();
 
-const PermissionManagement = () => {
-  const [users, setUsers] = useState<User[]>([]);
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [productionLines, setProductionLines] = useState<ProductionLine[]>([]);
-
-  const [selectedUserID, setSelectedUserID] = useState<number>();
-  const [selectedDepartmentID, setSelectedDepartmentID] = useState<number>();
-  const [selectedRole, setSelectedRole] = useState<string>();
-  const [selectedDefaultDepartmentID, setSelectedDefaultDepartmentID] =
-    useState<number>();
-
-  const [userMatrix, setUserMatrix] = useState<PermissionMatrixItem[]>([]);
-  const [departmentMatrix, setDepartmentMatrix] = useState<
-    PermissionMatrixItem[]
-  >([]);
-  const [roleDefaultMatrix, setRoleDefaultMatrix] = useState<
-    PermissionMatrixItem[]
-  >([]);
-  const [departmentDefaultMatrix, setDepartmentDefaultMatrix] = useState<
-    PermissionMatrixItem[]
-  >([]);
-
-  const [baseLoading, setBaseLoading] = useState(false);
-  const [userLoading, setUserLoading] = useState(false);
-  const [departmentLoading, setDepartmentLoading] = useState(false);
-  const [roleDefaultLoading, setRoleDefaultLoading] = useState(false);
-  const [departmentDefaultLoading, setDepartmentDefaultLoading] =
-    useState(false);
-  const [userSaving, setUserSaving] = useState(false);
-  const [departmentSaving, setDepartmentSaving] = useState(false);
-  const [roleDefaultSaving, setRoleDefaultSaving] = useState(false);
-  const [departmentDefaultSaving, setDepartmentDefaultSaving] = useState(false);
-
-  const roleOptions = useMemo(() => {
-    const roles = users
-      .map((user) => user.role?.trim())
-      .filter((role): role is string => Boolean(role));
-    return Array.from(new Set(['admin', 'user', ...roles]));
-  }, [users]);
-
-  const loadBaseData = useCallback(async () => {
-    setBaseLoading(true);
+  const loadRoles = useCallback(async () => {
     try {
-      const [usersRes, departmentsRes, linesRes] = await Promise.all([
-        api.get('/users'),
-        api.get('/departments'),
-        api.get('/production-lines'),
-      ]);
-
-      const loadedUsers = Array.isArray(usersRes.data) ? usersRes.data : [];
-      const loadedDepartments = Array.isArray(departmentsRes.data)
-        ? departmentsRes.data
-        : [];
-      const loadedLines = Array.isArray(linesRes.data) ? linesRes.data : [];
-
-      setUsers(loadedUsers);
-      setDepartments(loadedDepartments);
-      setProductionLines(loadedLines);
-      setSelectedUserID((current) => current ?? loadedUsers[0]?.id);
-      setSelectedDepartmentID((current) => current ?? loadedDepartments[0]?.id);
-      setSelectedDefaultDepartmentID(
-        (current) => current ?? loadedDepartments[0]?.id,
-      );
-      setSelectedRole((current) => current ?? loadedUsers[0]?.role ?? 'admin');
-    } catch (error) {
-      console.error('Failed to load permission base data:', error);
-      message.error('基础数据加载失败');
-    } finally {
-      setBaseLoading(false);
+      const res = await api.get('/roles');
+      setRoles(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      message.error('加载角色失败');
     }
   }, []);
 
-  const loadMatrix = useCallback(
-    async (
-      url: string,
-      setRows: (rows: PermissionMatrixItem[]) => void,
-      setLoading: (loading: boolean) => void,
-    ) => {
-      setLoading(true);
-      try {
-        const response = await api.get(url);
-        const items = Array.isArray(response.data?.items)
-          ? response.data.items
-          : [];
-        setRows(markMatrixRowsClean(items));
-      } catch (error) {
-        console.error(`Failed to load permission matrix ${url}:`, error);
-        message.error('权限矩阵加载失败');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    loadBaseData();
-  }, [loadBaseData]);
-
-  useEffect(() => {
-    if (selectedUserID) {
-      loadMatrix(
-        `/permissions/user/${selectedUserID}/matrix`,
-        setUserMatrix,
-        setUserLoading,
-      );
+  const loadPermissions = useCallback(async () => {
+    try {
+      const res = await api.get('/permission-definitions');
+      setAllPermissions(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      // ignore
     }
-  }, [loadMatrix, selectedUserID]);
+  }, []);
+
+  const loadRoleDetail = useCallback(async (roleId: number) => {
+    setLoading(true);
+    try {
+      const [detailRes, matrixRes] = await Promise.all([
+        api.get(`/roles/${roleId}`),
+        api.get(`/roles/${roleId}/permissions`),
+      ]);
+
+      const perms: Permission[] = detailRes.data?.permissions || [];
+      setRolePermIDs(new Set(perms.map((p: Permission) => p.id)));
+
+      const items: RoleLinePermItem[] = matrixRes.data?.permissions || [];
+      setLineMatrix(items);
+    } catch {
+      message.error('加载角色详情失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (selectedDepartmentID) {
-      loadMatrix(
-        `/department-permissions/department/${selectedDepartmentID}/matrix`,
-        setDepartmentMatrix,
-        setDepartmentLoading,
-      );
-    }
-  }, [loadMatrix, selectedDepartmentID]);
+    loadRoles();
+    loadPermissions();
+  }, [loadRoles, loadPermissions]);
 
   useEffect(() => {
     if (selectedRole) {
-      loadMatrix(
-        `/permission-defaults/roles/${encodeURIComponent(selectedRole)}/matrix`,
-        setRoleDefaultMatrix,
-        setRoleDefaultLoading,
-      );
+      loadRoleDetail(selectedRole.id);
     }
-  }, [loadMatrix, selectedRole]);
+  }, [selectedRole, loadRoleDetail]);
 
-  useEffect(() => {
-    if (selectedDefaultDepartmentID) {
-      loadMatrix(
-        `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
-        setDepartmentDefaultMatrix,
-        setDepartmentDefaultLoading,
-      );
+  const handleCreateRole = async (values: { name: string; description: string }) => {
+    try {
+      await api.post('/roles', values);
+      message.success('角色创建成功');
+      setCreateModalOpen(false);
+      createForm.resetFields();
+      loadRoles();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '创建失败');
     }
-  }, [loadMatrix, selectedDefaultDepartmentID]);
-
-  const updateMatrixBit = (
-    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
-    productionLineID: number,
-    bit: PermissionBit,
-    checked: boolean,
-  ) => {
-    // 修改任一权限位即进入“显式覆盖”模式，四个权限全 false 表示显式拒绝。
-    setRows((rows) =>
-      rows.map((row) => {
-        if (row.production_line_id !== productionLineID) {
-          return row;
-        }
-        const nextRow = { ...row, override: true, [bit]: checked };
-        return { ...nextRow, dirty: isMatrixRowDirty(nextRow) };
-      }),
-    );
   };
 
-  const updateMatrixOverride = (
-    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
-    productionLineID: number,
-    checked: boolean,
-  ) => {
-    // 关闭覆盖表示回到继承，保存时会带 inherit=true 让后端清除显式配置。
-    setRows((rows) =>
-      rows.map((row) => {
-        if (row.production_line_id !== productionLineID) {
-          return row;
-        }
-        const nextRow = checked
-          ? { ...row, override: true }
-          : {
-              ...row,
-              override: false,
-              can_view: false,
-              can_download: false,
-              can_upload: false,
-              can_manage: false,
-            };
-        return { ...nextRow, dirty: isMatrixRowDirty(nextRow) };
-      }),
-    );
+  const handleDeleteRole = async (roleId: number) => {
+    try {
+      await api.delete(`/roles/${roleId}`);
+      message.success('角色已删除');
+      if (selectedRole?.id === roleId) {
+        setSelectedRole(null);
+      }
+      loadRoles();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '删除失败');
+    }
   };
 
-  const saveMatrix = async (
-    url: string,
-    rows: PermissionMatrixItem[],
-    setSaving: (saving: boolean) => void,
-    reload: () => void,
-    supportsOverrideMode = false,
-  ) => {
+  const handleTogglePerm = (permId: number, checked: boolean) => {
+    setRolePermIDs((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(permId);
+      else next.delete(permId);
+      return next;
+    });
+  };
+
+  const handleSaveFunctionPerms = async () => {
+    if (!selectedRole) return;
     setSaving(true);
     try {
-      // supportsOverrideMode 只用于用户/部门矩阵；默认权限矩阵仍按传统空权限删除处理。
-      await api.put(url, toMatrixPayload(rows, supportsOverrideMode));
-      message.success('权限矩阵已保存');
-      reload();
-    } catch (error) {
-      console.error(`Failed to save permission matrix ${url}:`, error);
-      message.error('权限矩阵保存失败');
+      await api.put(`/roles/${selectedRole.id}/function-permissions`, {
+        permission_ids: Array.from(rolePermIDs),
+      });
+      message.success('功能权限已保存');
+    } catch {
+      message.error('保存失败');
     } finally {
       setSaving(false);
     }
   };
 
-  const buildColumns = (
-    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
-    supportsOverrideMode = false,
-  ): TableColumnsType<PermissionMatrixItem> => [
-    {
-      title: '生产线',
-      dataIndex: 'production_line_name',
-      key: 'production_line_name',
-      width: 220,
-      render: (text: string) => <strong>{text}</strong>,
-    },
-    {
-      title: '来源',
-      dataIndex: 'source',
-      key: 'source',
-      width: 120,
-      render: (source?: string, record?: PermissionMatrixItem) => {
-        if (supportsOverrideMode && record?.dirty) {
-          return record.override ? '显式覆盖' : '继承';
-        }
-        return sourceLabels[source || 'none'] || source;
-      },
-    },
-    ...(supportsOverrideMode
-      ? [
-          {
-            title: '模式',
-            dataIndex: 'override',
-            key: 'override',
-            width: 120,
-            render: (_value: boolean, record: PermissionMatrixItem) => (
-              <Switch
-                aria-label={`${record.production_line_name} 覆盖`}
-                checked={Boolean(record.override)}
-                checkedChildren="覆盖"
-                unCheckedChildren="继承"
-                onChange={(checked) =>
-                  updateMatrixOverride(
-                    setRows,
-                    record.production_line_id,
-                    checked,
-                  )
-                }
-              />
-            ),
-          },
-        ]
-      : []),
-    ...permissionBits.map((bit) => ({
+  const handleToggleLineBit = (lineId: number, bit: PermissionBit, checked: boolean) => {
+    setLineMatrix((rows) =>
+      rows.map((row) =>
+        row.production_line_id === lineId ? { ...row, [bit]: checked } : row,
+      ),
+    );
+  };
+
+  const handleSaveLinePerms = async () => {
+    if (!selectedRole) return;
+    setSaving(true);
+    try {
+      await api.put(`/roles/${selectedRole.id}/permissions`, {
+        permissions: lineMatrix.map((row) => ({
+          production_line_id: row.production_line_id,
+          can_view: row.can_view,
+          can_download: row.can_download,
+          can_upload: row.can_upload,
+          can_manage: row.can_manage,
+        })),
+      });
+      message.success('产线权限已保存');
+      loadRoleDetail(selectedRole.id);
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 按 resource 分组功能权限
+  const groupedPerms = allPermissions.reduce<Record<string, Permission[]>>((acc, p) => {
+    const key = p.type === 'page' ? '页面权限' : '操作权限';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(p);
+    return acc;
+  }, {});
+
+  const lineColumns: TableColumnsType<RoleLinePermItem> = [
+    { title: '产线', dataIndex: 'production_line_name', width: 200 },
+    ...permBitConfig.map((bit) => ({
       title: bit.label,
       dataIndex: bit.key,
-      key: bit.key,
-      width: 110,
-      render: (value: boolean, record: PermissionMatrixItem) => (
-        <Switch
-          aria-label={`${record.production_line_name} ${bit.label}`}
-          checked={value}
-          disabled={supportsOverrideMode && !record.override}
-          onChange={(checked) =>
-            updateMatrixBit(
-              setRows,
-              record.production_line_id,
-              bit.key,
-              checked,
-            )
-          }
+      width: 80,
+      align: 'center' as const,
+      render: (_: boolean, record: RoleLinePermItem) => (
+        <Checkbox
+          checked={record[bit.key]}
+          onChange={(e) => handleToggleLineBit(record.production_line_id, bit.key, e.target.checked)}
         />
       ),
     })),
   ];
 
-  const renderToolbar = (
-    selector: React.ReactNode,
-    rows: PermissionMatrixItem[],
-    loading: boolean,
-    saving: boolean,
-    onReload: () => void,
-    onSave: () => void,
-  ) => (
-    <Space
-      wrap
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        marginBottom: 16,
-        width: '100%',
-      }}
-    >
-      <Space wrap>
-        {selector}
-        <span style={{ color: '#5A6062' }}>
-          共 {productionLines.length} 条产线
-        </span>
-      </Space>
-      <Space>
-        <Button icon={<ReloadOutlined />} onClick={onReload} loading={loading}>
-          重载
-        </Button>
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          onClick={onSave}
-          loading={saving}
-          disabled={rows.length === 0 || !rows.some((row) => row.dirty)}
-        >
-          保存
-        </Button>
-      </Space>
-    </Space>
-  );
-
-  const renderMatrix = (
-    rows: PermissionMatrixItem[],
-    setRows: Dispatch<SetStateAction<PermissionMatrixItem[]>>,
-    loading: boolean,
-    supportsOverrideMode = false,
-  ) => (
-    <Table
-      columns={buildColumns(setRows, supportsOverrideMode)}
-      dataSource={rows}
-      rowKey="production_line_id"
-      loading={loading || baseLoading}
-      pagination={false}
-      className="custom-table"
-      scroll={{ x: supportsOverrideMode ? 880 : 760 }}
-    />
-  );
-
   return (
-    <div className="management-page">
-      <div className="management-page-header">
-        <div>
-          <div className="management-page-breadcrumb">
-            <span>系统</span>
-            <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>
-              /
-            </span>
-            <span className="active">权限管理</span>
-          </div>
-          <Title level={2} className="management-page-title">
-            权限管理
-          </Title>
+    <div style={{ display: 'flex', gap: 24, minHeight: 500 }}>
+      {/* 左侧：角色列表 */}
+      <div style={{ width: 240, flexShrink: 0 }}>
+        <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text strong>角色列表</Text>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            新建
+          </Button>
+        </div>
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, overflow: 'hidden' }}>
+          {roles.map((role) => (
+            <div
+              key={role.id}
+              onClick={() => setSelectedRole(role)}
+              style={{
+                padding: '10px 12px',
+                cursor: 'pointer',
+                background: selectedRole?.id === role.id ? '#e6f4ff' : '#fff',
+                borderBottom: '1px solid #f0f0f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: selectedRole?.id === role.id ? 600 : 400 }}>
+                  {roleLabels[role.name] || role.name}
+                </div>
+                {role.description && (
+                  <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>{role.description}</div>
+                )}
+              </div>
+              {role.is_system ? (
+                <Tag color="blue">系统</Tag>
+              ) : role.is_preset ? (
+                <Tag>预设</Tag>
+              ) : (
+                <Popconfirm title="确认删除该角色？" onConfirm={() => handleDeleteRole(role.id)}>
+                  <DeleteOutlined style={{ color: '#ff4d4f', fontSize: 12 }} />
+                </Popconfirm>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
-      <ConfigProvider
-        theme={{
-          components: {
-            Select: {
-              controlHeight: 36,
-              borderRadius: 6,
-            },
-          },
+      {/* 右侧：权限配置 */}
+      <div style={{ flex: 1 }}>
+        {!selectedRole ? (
+          <div style={{ textAlign: 'center', padding: 80, color: '#999' }}>请从左侧选择一个角色</div>
+        ) : (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Text strong style={{ fontSize: 16 }}>
+                {roleLabels[selectedRole.name] || selectedRole.name}
+              </Text>
+              {selectedRole.is_system && <Tag color="blue" style={{ marginLeft: 8 }}>系统角色</Tag>}
+            </div>
+
+            {/* 功能权限 */}
+            <div style={{ marginBottom: 24, padding: 16, background: '#fafafa', borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text strong>功能权限</Text>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={saving}
+                  onClick={handleSaveFunctionPerms}
+                >
+                  保存功能权限
+                </Button>
+              </div>
+              {Object.entries(groupedPerms).map(([group, perms]) => (
+                <div key={group} style={{ marginBottom: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{group}</Text>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: 4 }}>
+                    {perms.map((perm) => (
+                      <Checkbox
+                        key={perm.id}
+                        checked={rolePermIDs.has(perm.id)}
+                        onChange={(e) => handleTogglePerm(perm.id, e.target.checked)}
+                      >
+                        {perm.name}
+                      </Checkbox>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 产线权限 */}
+            <div style={{ padding: 16, background: '#fafafa', borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text strong>产线权限</Text>
+                <Space>
+                  <Button size="small" icon={<ReloadOutlined />} onClick={() => loadRoleDetail(selectedRole.id)}>
+                    刷新
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    loading={saving}
+                    onClick={handleSaveLinePerms}
+                  >
+                    保存产线权限
+                  </Button>
+                </Space>
+              </div>
+              <Table
+                dataSource={lineMatrix}
+                columns={lineColumns}
+                rowKey="production_line_id"
+                loading={loading}
+                size="small"
+                pagination={false}
+                scroll={{ y: 400 }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 新建角色弹窗 */}
+      <Modal
+        title="新建角色"
+        open={createModalOpen}
+        onCancel={() => {
+          setCreateModalOpen(false);
+          createForm.resetFields();
         }}
+        onOk={() => createForm.submit()}
       >
-        <div className="management-table-card">
-          <Tabs
-            items={[
-              {
-                key: 'user_matrix',
-                label: (
-                  <span>
-                    <UserOutlined />
-                    用户权限矩阵
-                  </span>
-                ),
-                children: (
-                  <>
-                    {renderToolbar(
-                      <Select
-                        aria-label="选择用户"
-                        data-testid="user-matrix-select"
-                        style={{ width: 280 }}
-                        placeholder="选择用户"
-                        value={selectedUserID}
-                        onChange={setSelectedUserID}
-                        options={users.map((user) => ({
-                          value: user.id,
-                          label: `${user.name}${
-                            user.employee_id ? ` (${user.employee_id})` : ''
-                          }${
-                            user.department?.name
-                              ? ` - ${user.department.name}`
-                              : ''
-                          }`,
-                        }))}
-                      />,
-                      userMatrix,
-                      userLoading,
-                      userSaving,
-                      () => {
-                        if (selectedUserID) {
-                          loadMatrix(
-                            `/permissions/user/${selectedUserID}/matrix`,
-                            setUserMatrix,
-                            setUserLoading,
-                          );
-                        }
-                      },
-                      () => {
-                        if (selectedUserID) {
-                          saveMatrix(
-                            `/permissions/user/${selectedUserID}/matrix`,
-                            userMatrix,
-                            setUserSaving,
-                            () =>
-                              loadMatrix(
-                                `/permissions/user/${selectedUserID}/matrix`,
-                                setUserMatrix,
-                                setUserLoading,
-                              ),
-                            true,
-                          );
-                        }
-                      },
-                    )}
-                    {renderMatrix(
-                      userMatrix,
-                      setUserMatrix,
-                      userLoading,
-                      true,
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: 'department_matrix',
-                label: (
-                  <span>
-                    <TeamOutlined />
-                    部门权限矩阵
-                  </span>
-                ),
-                children: (
-                  <>
-                    {renderToolbar(
-                      <Select
-                        aria-label="选择部门"
-                        data-testid="department-matrix-select"
-                        style={{ width: 260 }}
-                        placeholder="选择部门"
-                        value={selectedDepartmentID}
-                        onChange={setSelectedDepartmentID}
-                        options={departments.map((department) => ({
-                          value: department.id,
-                          label: department.name,
-                        }))}
-                      />,
-                      departmentMatrix,
-                      departmentLoading,
-                      departmentSaving,
-                      () => {
-                        if (selectedDepartmentID) {
-                          loadMatrix(
-                            `/department-permissions/department/${selectedDepartmentID}/matrix`,
-                            setDepartmentMatrix,
-                            setDepartmentLoading,
-                          );
-                        }
-                      },
-                      () => {
-                        if (selectedDepartmentID) {
-                          saveMatrix(
-                            `/department-permissions/department/${selectedDepartmentID}/matrix`,
-                            departmentMatrix,
-                            setDepartmentSaving,
-                            () =>
-                              loadMatrix(
-                                `/department-permissions/department/${selectedDepartmentID}/matrix`,
-                                setDepartmentMatrix,
-                                setDepartmentLoading,
-                              ),
-                            true,
-                          );
-                        }
-                      },
-                    )}
-                    {renderMatrix(
-                      departmentMatrix,
-                      setDepartmentMatrix,
-                      departmentLoading,
-                      true,
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: 'role_defaults',
-                label: (
-                  <span>
-                    <SafetyCertificateOutlined />
-                    角色默认权限
-                  </span>
-                ),
-                children: (
-                  <>
-                    {renderToolbar(
-                      <Select
-                        aria-label="选择角色"
-                        data-testid="role-default-select"
-                        style={{ width: 220 }}
-                        placeholder="选择角色"
-                        value={selectedRole}
-                        onChange={setSelectedRole}
-                        options={roleOptions.map((role) => ({
-                          value: role,
-                          label: role,
-                        }))}
-                      />,
-                      roleDefaultMatrix,
-                      roleDefaultLoading,
-                      roleDefaultSaving,
-                      () => {
-                        if (selectedRole) {
-                          loadMatrix(
-                            `/permission-defaults/roles/${encodeURIComponent(
-                              selectedRole,
-                            )}/matrix`,
-                            setRoleDefaultMatrix,
-                            setRoleDefaultLoading,
-                          );
-                        }
-                      },
-                      () => {
-                        if (selectedRole) {
-                          saveMatrix(
-                            `/permission-defaults/roles/${encodeURIComponent(
-                              selectedRole,
-                            )}/matrix`,
-                            roleDefaultMatrix,
-                            setRoleDefaultSaving,
-                            () =>
-                              loadMatrix(
-                                `/permission-defaults/roles/${encodeURIComponent(
-                                  selectedRole,
-                                )}/matrix`,
-                                setRoleDefaultMatrix,
-                                setRoleDefaultLoading,
-                              ),
-                          );
-                        }
-                      },
-                    )}
-                    {renderMatrix(
-                      roleDefaultMatrix,
-                      setRoleDefaultMatrix,
-                      roleDefaultLoading,
-                    )}
-                  </>
-                ),
-              },
-              {
-                key: 'department_defaults',
-                label: (
-                  <span>
-                    <ApartmentOutlined />
-                    部门默认权限
-                  </span>
-                ),
-                children: (
-                  <>
-                    {renderToolbar(
-                      <Select
-                        aria-label="选择默认部门"
-                        data-testid="department-default-select"
-                        style={{ width: 260 }}
-                        placeholder="选择部门"
-                        value={selectedDefaultDepartmentID}
-                        onChange={setSelectedDefaultDepartmentID}
-                        options={departments.map((department) => ({
-                          value: department.id,
-                          label: department.name,
-                        }))}
-                      />,
-                      departmentDefaultMatrix,
-                      departmentDefaultLoading,
-                      departmentDefaultSaving,
-                      () => {
-                        if (selectedDefaultDepartmentID) {
-                          loadMatrix(
-                            `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
-                            setDepartmentDefaultMatrix,
-                            setDepartmentDefaultLoading,
-                          );
-                        }
-                      },
-                      () => {
-                        if (selectedDefaultDepartmentID) {
-                          saveMatrix(
-                            `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
-                            departmentDefaultMatrix,
-                            setDepartmentDefaultSaving,
-                            () =>
-                              loadMatrix(
-                                `/permission-defaults/departments/${selectedDefaultDepartmentID}/matrix`,
-                                setDepartmentDefaultMatrix,
-                                setDepartmentDefaultLoading,
-                              ),
-                          );
-                        }
-                      },
-                    )}
-                    {renderMatrix(
-                      departmentDefaultMatrix,
-                      setDepartmentDefaultMatrix,
-                      departmentDefaultLoading,
-                    )}
-                  </>
-                ),
-              },
-            ]}
+        <Form form={createForm} onFinish={handleCreateRole} layout="vertical">
+          <Form.Item name="name" label="角色标识" rules={[{ required: true, message: '请输入角色标识' }]}>
+            <Input placeholder="如 custom_role_1" />
+          </Form.Item>
+          <Form.Item name="description" label="角色描述">
+            <Input.TextArea placeholder="角色用途说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  );
+};
+
+// ========== Tab 2: 用户权限 ==========
+
+const UserPermTab = () => {
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<number>();
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [lineMatrix, setLineMatrix] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get('/users').then((res) => {
+      const list = Array.isArray(res.data) ? res.data : [];
+      setUsers(list);
+      if (list.length > 0 && !selectedUserId) {
+        setSelectedUserId(list[0].id);
+      }
+    });
+  }, []);
+
+  const loadUserMatrix = useCallback(async (userId: number) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/permissions/user/${userId}/matrix`);
+      const items = res.data?.items || [];
+      // 加载角色产线权限作为对比
+      const user = users.find((u) => u.id === userId);
+      setSelectedUser(user || null);
+
+      // 标记来源
+      const marked = items.map((item: any) => ({
+        ...item,
+        override: item.source === 'user' || item.source === 'user_override',
+        dirty: false,
+        original: {
+          can_view: item.can_view,
+          can_download: item.can_download,
+          can_upload: item.can_upload,
+          can_manage: item.can_manage,
+          override: item.source === 'user' || item.source === 'user_override',
+        },
+      }));
+      setLineMatrix(marked);
+    } catch {
+      message.error('加载用户权限失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [users]);
+
+  useEffect(() => {
+    if (selectedUserId) {
+      loadUserMatrix(selectedUserId);
+    }
+  }, [selectedUserId, loadUserMatrix]);
+
+  const handleToggleBit = (lineId: number, bit: PermissionBit, checked: boolean) => {
+    setLineMatrix((rows) =>
+      rows.map((row) => {
+        if (row.production_line_id !== lineId) return row;
+        const next = { ...row, [bit]: checked, override: true };
+        const dirty =
+          !next.original ||
+          next.override !== next.original.override ||
+          permBitConfig.some((b) => next[b.key] !== next.original?.[b.key]);
+        return { ...next, dirty };
+      }),
+    );
+  };
+
+  const handleToggleOverride = (lineId: number, checked: boolean) => {
+    setLineMatrix((rows) =>
+      rows.map((row) => {
+        if (row.production_line_id !== lineId) return row;
+        if (checked) {
+          return { ...row, override: true, dirty: true };
+        }
+        // 回退到继承
+        const next = {
+          ...row,
+          override: false,
+          can_view: false,
+          can_download: false,
+          can_upload: false,
+          can_manage: false,
+        };
+        return { ...next, dirty: true };
+      }),
+    );
+  };
+
+  const handleSave = async () => {
+    if (!selectedUserId) return;
+    setSaving(true);
+    try {
+      const dirtyRows = lineMatrix.filter((r) => r.dirty);
+      await api.put(`/permissions/user/${selectedUserId}/matrix`, {
+        permissions: dirtyRows.map((row) => ({
+          production_line_id: row.production_line_id,
+          inherit: !row.override,
+          can_view: row.can_view,
+          can_download: row.can_download,
+          can_upload: row.can_upload,
+          can_manage: row.can_manage,
+        })),
+      });
+      message.success('用户权限已保存');
+      loadUserMatrix(selectedUserId);
+    } catch {
+      message.error('保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sourceTag = (source: string) => {
+    const colors: Record<string, string> = {
+      user: 'blue',
+      user_override: 'blue',
+      role: 'green',
+      role_default: 'green',
+      department: 'orange',
+      department_default: 'orange',
+      none: 'default',
+    };
+    const labels: Record<string, string> = {
+      user: '用户覆盖',
+      user_override: '用户覆盖',
+      role: '角色',
+      role_default: '角色默认',
+      department: '部门',
+      department_default: '部门默认',
+      none: '无',
+    };
+    return <Tag color={colors[source] || 'default'}>{labels[source] || source}</Tag>;
+  };
+
+  const columns: TableColumnsType<any> = [
+    { title: '产线', dataIndex: 'production_line_name', width: 180 },
+    {
+      title: '来源',
+      dataIndex: 'source',
+      width: 100,
+      render: (source: string) => sourceTag(source),
+    },
+    {
+      title: '覆盖',
+      dataIndex: 'override',
+      width: 80,
+      align: 'center',
+      render: (override: boolean, record: any) => (
+        <Switch
+          size="small"
+          checked={override}
+          onChange={(checked) => handleToggleOverride(record.production_line_id, checked)}
+        />
+      ),
+    },
+    ...permBitConfig.map((bit) => ({
+      title: bit.label,
+      dataIndex: bit.key,
+      width: 80,
+      align: 'center' as const,
+      render: (val: boolean, record: any) => (
+        <Checkbox
+          checked={val}
+          disabled={!record.override}
+          onChange={(e) => handleToggleBit(record.production_line_id, bit.key, e.target.checked)}
+        />
+      ),
+    })),
+    {
+      title: '状态',
+      width: 80,
+      render: (_: any, record: any) =>
+        record.dirty ? <Tag color="orange">已修改</Tag> : <Tag color="green">正常</Tag>,
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Space>
+          <Text strong>选择用户：</Text>
+          <Select
+            style={{ width: 240 }}
+            showSearch
+            optionFilterProp="label"
+            value={selectedUserId}
+            onChange={setSelectedUserId}
+            options={users.map((u) => ({
+              value: u.id,
+              label: `${u.name} (${u.employee_id})`,
+            }))}
           />
-        </div>
-      </ConfigProvider>
+          {selectedUser && (
+            <Text type="secondary">
+              角色: {roleLabels[selectedUser.role] || selectedUser.role}
+              {selectedUser.department?.name ? ` | 部门: ${selectedUser.department.name}` : ''}
+            </Text>
+          )}
+        </Space>
+        <Space>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => selectedUserId && loadUserMatrix(selectedUserId)}
+          >
+            刷新
+          </Button>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            onClick={handleSave}
+          >
+            保存
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        dataSource={lineMatrix}
+        columns={columns}
+        rowKey="production_line_id"
+        loading={loading}
+        size="small"
+        pagination={false}
+        scroll={{ y: 500 }}
+      />
+    </div>
+  );
+};
+
+// ========== Tab 3: 产线管理员 ==========
+
+const LineAdminTab = () => {
+  const [assignments, setAssignments] = useState<LineAdminAssignment[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [lines, setLines] = useState<ProductionLine[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addForm] = Form.useForm();
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [assignRes, usersRes, linesRes] = await Promise.all([
+        api.get('/line-admin/assignments'),
+        api.get('/users'),
+        api.get('/production-lines'),
+      ]);
+      setAssignments(Array.isArray(assignRes.data) ? assignRes.data : []);
+      setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+      setLines(Array.isArray(linesRes.data) ? linesRes.data : []);
+    } catch {
+      message.error('加载数据失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleAdd = async (values: { user_id: number; production_line_id: number }) => {
+    try {
+      await api.post('/line-admin/assignments', values);
+      message.success('分配成功');
+      setAddModalOpen(false);
+      addForm.resetFields();
+      loadData();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '分配失败');
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    try {
+      await api.delete(`/line-admin/assignments/${id}`);
+      message.success('已取消分配');
+      loadData();
+    } catch (error: any) {
+      message.error(error.response?.data?.error || '操作失败');
+    }
+  };
+
+  // 按产线分组
+  const lineGroups = lines.map((line) => {
+    const lineAssignments = assignments.filter((a) => a.production_line_id === line.id);
+    return {
+      line,
+      assignments: lineAssignments,
+    };
+  });
+
+  const columns: TableColumnsType<any> = [
+    { title: '产线', dataIndex: ['line', 'name'], width: 200 },
+    {
+      title: '管理员',
+      render: (_: any, record: any) => (
+        <Space wrap>
+          {record.assignments.map((a: LineAdminAssignment) => (
+            <Tag
+              key={a.id}
+              closable
+              onClose={() => handleDelete(a.id)}
+              color="blue"
+            >
+              {a.user?.name || `用户${a.user_id}`}
+            </Tag>
+          ))}
+          {record.assignments.length === 0 && <Text type="secondary">无管理员</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: '操作',
+      width: 100,
+      render: (_: any, record: any) => (
+        <Button
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() => {
+            addForm.setFieldsValue({ production_line_id: record.line.id });
+            setAddModalOpen(true);
+          }}
+        >
+          添加
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+        <Text type="secondary">产线管理员可以管理指定产线的内容，并为其他用户分配该产线的查看/下载/上传权限。</Text>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={loadData}>
+            刷新
+          </Button>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              addForm.resetFields();
+              setAddModalOpen(true);
+            }}
+          >
+            新增分配
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        dataSource={lineGroups}
+        columns={columns}
+        rowKey={(record) => record.line.id}
+        loading={loading}
+        size="small"
+        pagination={false}
+      />
+
+      <Modal
+        title="分配产线管理员"
+        open={addModalOpen}
+        onCancel={() => {
+          setAddModalOpen(false);
+          addForm.resetFields();
+        }}
+        onOk={() => addForm.submit()}
+      >
+        <Form form={addForm} onFinish={handleAdd} layout="vertical">
+          <Form.Item name="user_id" label="用户" rules={[{ required: true, message: '请选择用户' }]}>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择用户"
+              options={users.map((u) => ({
+                value: u.id,
+                label: `${u.name} (${u.employee_id}) - ${roleLabels[u.role] || u.role}`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="production_line_id"
+            label="产线"
+            rules={[{ required: true, message: '请选择产线' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择产线"
+              options={lines.map((l) => ({ value: l.id, label: l.name }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };
