@@ -84,6 +84,7 @@ deploy.zip
 
 # Local task tracking and temporary analysis artifacts
 task.md
+mimo.md
 planning.md
 fnpm.cmd
 fnpm.sh
