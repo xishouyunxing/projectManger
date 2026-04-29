@@ -45,7 +45,7 @@ const Layout = () => {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, isAdmin, hasPermission } = useAuth();
 
   // 全局快捷键 Ctrl+K
   useEffect(() => {
@@ -93,7 +93,7 @@ const Layout = () => {
     <span onMouseEnter={() => prefetchRoute(path)}>{text}</span>
   );
 
-  const menuItems = [
+  const allMenuItems = [
     {
       key: '/dashboard',
       icon: <DashboardOutlined />,
@@ -103,39 +103,43 @@ const Layout = () => {
       key: '/programs',
       icon: <FileTextOutlined />,
       label: routeLabel('/programs', '程序管理'),
+      permission: 'page:programs',
     },
     {
       key: '/vehicle-models',
       icon: <CarOutlined />,
       label: routeLabel('/vehicle-models', '车型管理'),
+      permission: 'page:vehicle_models',
     },
     {
       key: '/production-lines',
       icon: <SettingOutlined />,
       label: routeLabel('/production-lines', '生产线管理'),
-      requiresAdmin: true,
+      permission: 'page:production_lines',
     },
     {
       key: '/users',
       icon: <UserOutlined />,
       label: routeLabel('/users', '用户管理'),
-      requiresAdmin: true,
+      permission: 'page:user_management',
     },
     {
       key: '/permissions',
       icon: <LockOutlined />,
       label: routeLabel('/permissions', '权限管理'),
-      requiresAdmin: true,
+      permission: 'page:permissions',
     },
     {
       key: '/system-management',
       icon: <ControlOutlined />,
       label: routeLabel('/system-management', '系统管理'),
-      requiresAdmin: true,
+      permission: 'page:system_management',
     },
-  ]
-    .filter((item) => !item.requiresAdmin || isAdmin)
-    .map(({ requiresAdmin: _requiresAdmin, ...item }) => item);
+  ];
+
+  const menuItems = allMenuItems
+    .filter((item) => !item.permission || isAdmin || hasPermission(item.permission))
+    .map(({ permission: _permission, ...item }) => item);
 
   const userMenuItems: MenuProps['items'] = [
     {
@@ -337,7 +341,17 @@ const Layout = () => {
           </div>
           <div>
             <strong>角色:</strong>{' '}
-            {user?.role === 'admin' ? '管理员' : '普通用户'}
+            {(() => {
+              const roleNames: Record<string, string> = {
+                admin: '管理员',
+                system_admin: '系统管理员',
+                line_admin: '产线管理员',
+                engineer: '工程师',
+                operator: '操作员',
+                viewer: '访客',
+              };
+              return roleNames[user?.role || ''] || user?.role || '-';
+            })()}
           </div>
         </div>
 
