@@ -7,7 +7,7 @@ import 'dayjs/locale/zh-cn';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import PrivateRoute from './components/PrivateRoute';
-import AdminRoute from './components/AdminRoute';
+import PermissionRoute from './components/PermissionRoute';
 
 const Layout = lazy(() => import('./components/Layout'));
 const Login = lazy(() => import('./pages/Login'));
@@ -62,42 +62,42 @@ function App() {
                   <Route
                     path="users"
                     element={
-                      <AdminRoute>
+                      <PermissionRoute permission="page:user_management">
                         <UserManagement />
-                      </AdminRoute>
+                      </PermissionRoute>
                     }
                   />
                   <Route
                     path="production-lines"
                     element={
-                      <AdminRoute>
+                      <PermissionRoute permission="page:production_lines">
                         <ProductionLineManagement />
-                      </AdminRoute>
+                      </PermissionRoute>
                     }
                   />
                   <Route
                     path="vehicle-models"
                     element={
-                      <AdminRoute>
+                      <PermissionRoute permission="page:vehicle_models">
                         <VehicleModelManagement />
-                      </AdminRoute>
+                      </PermissionRoute>
                     }
                   />
                   <Route
                     path="permissions"
                     element={
-                      <AdminRoute>
+                      <PermissionRoute permission="page:permissions">
                         <PermissionManagement />
-                      </AdminRoute>
+                      </PermissionRoute>
                     }
                   />
                   <Route path="file-ignore-list" element={<FileIgnoreList />} />
                   <Route
                     path="system-management"
                     element={
-                      <AdminRoute>
+                      <PermissionRoute permission="page:system_management">
                         <SystemManagement />
-                      </AdminRoute>
+                      </PermissionRoute>
                     }
                   />
                   <Route
