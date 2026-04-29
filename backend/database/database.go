@@ -47,6 +47,12 @@ func migrationModels() []any {
 		&models.DepartmentPermission{},
 		&models.RoleDefaultPermission{},
 		&models.DepartmentDefaultPermission{},
+		&models.Role{},
+		&models.Permission{},
+		&models.RolePermission{},
+		&models.UserPermissionOverride{},
+		&models.RoleLinePermission{},
+		&models.LineAdminAssignment{},
 	}
 }
 

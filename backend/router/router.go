@@ -136,6 +136,35 @@ func SetupRouter() *gin.Engine {
 			permissionDefaults.PUT("/departments/:department_id/matrix", controllers.SaveDepartmentDefaultPermissionMatrix)
 		}
 
+		// 角色管理：系统管理员可管理所有角色，产线管理员可查看。
+		roles := protected.Group("/roles")
+		{
+			roles.GET("", controllers.GetRoles)
+			roles.GET("/:id", controllers.GetRole)
+			roles.POST("", middleware.AdminMiddleware(), controllers.CreateRole)
+			roles.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdateRole)
+			roles.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteRole)
+			roles.GET("/:id/permissions", controllers.GetRoleLinePermissions)
+			roles.PUT("/:id/permissions", middleware.AdminMiddleware(), controllers.SaveRoleLinePermissions)
+			roles.PUT("/:id/function-permissions", middleware.AdminMiddleware(), controllers.SaveRolePermissions)
+		}
+
+		// 功能权限定义（只读）。
+		permissionDefs := protected.Group("/permission-definitions")
+		{
+			permissionDefs.GET("", controllers.GetAllPermissions)
+		}
+
+		// 产线管理员分配。
+		lineAdmin := protected.Group("/line-admin")
+		{
+			lineAdmin.GET("/assignments", controllers.GetLineAdminAssignments)
+			lineAdmin.POST("/assignments", middleware.RequirePermission("op:line_permission_assign"), controllers.CreateLineAdminAssignment)
+			lineAdmin.DELETE("/assignments/:id", middleware.RequirePermission("op:line_permission_assign"), controllers.DeleteLineAdminAssignment)
+			lineAdmin.GET("/lines/:id/permissions", controllers.GetLinePermissionsByLine)
+			lineAdmin.PUT("/lines/:id/permissions", controllers.SaveLinePermissionByAdmin)
+		}
+
 		versions := protected.Group("/versions")
 		{
 			versions.GET("/program/:program_id", controllers.GetProgramVersions)
