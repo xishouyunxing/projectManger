@@ -16,6 +16,7 @@ import (
 	"crane-system/database"
 	"crane-system/middleware"
 	"crane-system/models"
+	"crane-system/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -207,9 +208,24 @@ func setupVehicleModelPermissionTest(t *testing.T) (*gin.Engine, string, models.
 	if err := database.DB.Create(&permission).Error; err != nil {
 		t.Fatalf("create permission: %v", err)
 	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineA.ID, true, false, false, false)
 
 	token := createUserTokenForTest(t, user.ID, "user")
 	return setupProgramCustomFieldValueTestRouter(), token, lineA, lineB
+}
+
+func saveProductionLineRuleForTest(t *testing.T, subject services.PermissionSubject, lineID uint, canView, canDownload, canUpload, canManage bool) {
+	t.Helper()
+	err := services.SavePermissionRuleChanges(subject, permissionRuleChangesForLineBits(linePermissionBits{
+		ProductionLineID: lineID,
+		CanView:          canView,
+		CanDownload:      canDownload,
+		CanUpload:        canUpload,
+		CanManage:        canManage,
+	}, false))
+	if err != nil {
+		t.Fatalf("save permission rule: %v", err)
+	}
 }
 
 func TestSaveProgramCustomFieldValuesReplacesCurrentSet(t *testing.T) {
@@ -1228,6 +1244,7 @@ func TestUserPermissionMatrixAllFalseOverridesInheritedPermission(t *testing.T) 
 	}).Error; err != nil {
 		t.Fatalf("create inherited department permission: %v", err)
 	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, line.ID, true, true, false, false)
 
 	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
 		"permissions": []map[string]any{
@@ -1276,6 +1293,7 @@ func TestUserPermissionMatrixCanClearOverrideBackToInheritance(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create inherited department permission: %v", err)
 	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, line.ID, true, true, false, false)
 	if err := database.DB.Create(&models.UserPermission{
 		UserID:           user.ID,
 		ProductionLineID: line.ID,
@@ -1286,6 +1304,7 @@ func TestUserPermissionMatrixCanClearOverrideBackToInheritance(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create user override: %v", err)
 	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, line.ID, false, false, false, false)
 
 	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
 		"permissions": []map[string]any{
@@ -1477,6 +1496,16 @@ func TestEffectivePermissionPrecedenceUsesUserDepartmentRoleAndDepartmentDefault
 			t.Fatalf("create precedence record: %v", err)
 		}
 	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: department.ID}, lineA.ID, true, false, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectRole, Key: "user"}, lineA.ID, false, true, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lineA.ID, false, false, true, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineA.ID, false, false, false, true)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: department.ID}, lineB.ID, true, false, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectRole, Key: "user"}, lineB.ID, false, true, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lineB.ID, false, false, true, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: department.ID}, lineC.ID, true, false, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectRole, Key: "user"}, lineC.ID, false, true, false, false)
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: department.ID}, lineD.ID, true, false, false, false)
 
 	resp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/department-permissions/user/%d/effective", user.ID), token, nil)
 	if resp.Code != http.StatusOK {
