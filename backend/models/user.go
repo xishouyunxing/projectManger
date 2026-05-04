@@ -7,7 +7,7 @@ import (
 )
 
 // User 是系统登录账号，也是权限解析的主体。
-// 产线权限会先看用户显式覆盖，再回落到部门权限、角色默认和部门默认权限。
+// 通过 role_id 关联 Role 表获取基础权限，user_permissions 表存储产线权限覆盖。
 type User struct {
 	ID           uint           `gorm:"primarykey" json:"id"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -18,10 +18,12 @@ type User struct {
 	Name         string         `gorm:"size:100;not null" json:"name"`
 	DepartmentID *uint          `gorm:"index" json:"department_id"`
 	Role         string         `gorm:"size:50;not null" json:"role"`
+	RoleID       *uint          `gorm:"index" json:"role_id"`
 	Password     string         `gorm:"size:255;not null" json:"-"`
 	Status       string         `gorm:"size:20;default:active" json:"status"`
 
 	Department *Department `json:"department,omitempty"`
+	RoleRef    *Role       `gorm:"foreignKey:RoleID" json:"role_ref,omitempty"`
 }
 
 // UserPermission 表示“某用户 + 某产线”的显式权限覆盖。

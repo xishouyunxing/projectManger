@@ -1,23 +1,40 @@
 import {
   createContext,
+  useCallback,
   useContext,
-  useState,
   useEffect,
+  useState,
   ReactNode,
 } from 'react';
 import api from '../services/api';
+
+interface Department {
+  id: number;
+  name: string;
+  description?: string;
+  status?: string;
+}
 
 interface User {
   id: number;
   employee_id: string;
   name: string;
-  department: {
-    id: number;
-    name: string;
-    description: string;
-    status: string;
-  } | null;
+  department: Department | null;
   role: string;
+  role_id?: number;
+}
+
+interface LinePermission {
+  can_view: boolean;
+  can_download: boolean;
+  can_upload: boolean;
+  can_manage: boolean;
+}
+
+interface UserPermissions {
+  codes: string[];
+  lines: Record<string, LinePermission>;
+  managed_line_ids: string[];
 }
 
 interface AuthContextType {
@@ -26,46 +43,85 @@ interface AuthContextType {
   login: (employeeId: string, password: string) => Promise<void>;
   logout: () => void;
   isAdmin: boolean;
+  isLineAdmin: boolean;
+  permissions: UserPermissions;
+  hasPermission: (code: string) => boolean;
+  hasLinePermission: (lineId: number | string, action: string) => boolean;
+  isLineManager: (lineId: number | string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// 4小时无交互自动登出（单位：毫秒）
-// 认证上下文负责维护前端登录态、自动登出计时和管理员角色判断。
-// 其他组件只通过 useAuth 读取状态，避免散落读取 localStorage。
 const AUTO_LOGOUT_TIME = 4 * 60 * 60 * 1000;
 
-// 获取初始状态（同步读取 localStorage）
-// 同步读取 localStorage，保证首次渲染时就能判断登录态，避免页面闪回登录页。
+const emptyPermissions: UserPermissions = {
+  codes: [],
+  lines: {},
+  managed_line_ids: [],
+};
+
+const normalizePermissions = (value: any): UserPermissions => ({
+  codes: Array.isArray(value?.codes) ? value.codes : [],
+  lines: value?.lines && typeof value.lines === 'object' ? value.lines : {},
+  managed_line_ids: Array.isArray(value?.managed_line_ids)
+    ? value.managed_line_ids.map(String)
+    : Array.isArray(value?.managedLineIds)
+      ? value.managedLineIds.map(String)
+      : [],
+});
+
+const clearStoredAuth = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('permissions');
+  localStorage.removeItem('lastActivity');
+};
+
+const parseStoredPermissions = (storedPermissions: string | null) => {
+  if (!storedPermissions) {
+    return emptyPermissions;
+  }
+  try {
+    return normalizePermissions(JSON.parse(storedPermissions));
+  } catch (error) {
+    console.warn('Invalid cached permission data, clearing auth state.', error);
+    clearStoredAuth();
+    return emptyPermissions;
+  }
+};
+
 const getInitialState = () => {
   const storedToken = localStorage.getItem('token');
   const storedUser = localStorage.getItem('user');
+  const storedPermissions = localStorage.getItem('permissions');
   const storedLastActivity = localStorage.getItem('lastActivity');
 
-  // 检查是否超时
   if (storedLastActivity && storedToken && storedUser) {
     const lastActivity = parseInt(storedLastActivity, 10);
     if (Date.now() - lastActivity > AUTO_LOGOUT_TIME) {
-      // 超时，清除存储并返回初始状态
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      localStorage.removeItem('lastActivity');
-      return { user: null, token: null };
+      clearStoredAuth();
+      return { user: null, token: null, permissions: emptyPermissions };
     }
   }
 
   if (!storedUser) {
-    return { token: storedToken, user: null };
+    return {
+      token: storedToken,
+      user: null,
+      permissions: parseStoredPermissions(storedPermissions),
+    };
   }
 
   try {
-    return { token: storedToken, user: JSON.parse(storedUser) };
+    return {
+      token: storedToken,
+      user: JSON.parse(storedUser),
+      permissions: parseStoredPermissions(storedPermissions),
+    };
   } catch (error) {
     console.warn('Invalid cached user data, clearing auth state.', error);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('lastActivity');
-    return { user: null, token: null };
+    clearStoredAuth();
+    return { user: null, token: null, permissions: emptyPermissions };
   }
 };
 
@@ -73,90 +129,136 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const initialState = getInitialState();
   const [user, setUser] = useState<User | null>(initialState.user);
   const [token, setToken] = useState<string | null>(initialState.token);
+  const [permissions, setPermissions] = useState<UserPermissions>(
+    initialState.permissions,
+  );
 
-  // 更新最后活动时间
-  // 记录用户最后活动时间，供自动登出逻辑使用。
   const updateLastActivity = () => {
     localStorage.setItem('lastActivity', Date.now().toString());
   };
 
-  // 初始化最后活动时间
+  const logout = useCallback(() => {
+    setUser(null);
+    setToken(null);
+    setPermissions(emptyPermissions);
+    clearStoredAuth();
+  }, []);
+
   useEffect(() => {
-    if (token) {
-      const storedLastActivity = localStorage.getItem('lastActivity');
-      if (!storedLastActivity) {
-        updateLastActivity();
-      }
+    if (token && !localStorage.getItem('lastActivity')) {
+      updateLastActivity();
     }
   }, [token]);
 
-  // 设置活动监听器
   useEffect(() => {
     if (!token) return;
 
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
-    const handleActivity = () => {
-      updateLastActivity();
-    };
+    const handleActivity = () => updateLastActivity();
 
-    events.forEach((event) => {
-      window.addEventListener(event, handleActivity);
-    });
-
+    events.forEach((event) => window.addEventListener(event, handleActivity));
     return () => {
-      events.forEach((event) => {
-        window.removeEventListener(event, handleActivity);
-      });
+      events.forEach((event) =>
+        window.removeEventListener(event, handleActivity),
+      );
     };
   }, [token]);
 
-  // 检查是否超时
   useEffect(() => {
     if (!token) return;
 
     const checkTimeout = () => {
       const lastActivity = localStorage.getItem('lastActivity');
-      if (lastActivity) {
-        const elapsed = Date.now() - parseInt(lastActivity, 10);
-        if (elapsed > AUTO_LOGOUT_TIME) {
-          logout();
-        }
+      if (!lastActivity) return;
+
+      const elapsed = Date.now() - parseInt(lastActivity, 10);
+      if (elapsed > AUTO_LOGOUT_TIME) {
+        logout();
       }
     };
 
-    const intervalId = setInterval(checkTimeout, 60000); // 每分钟检查一次
+    const intervalId = window.setInterval(checkTimeout, 60000);
+    return () => window.clearInterval(intervalId);
+  }, [logout, token]);
 
-    return () => clearInterval(intervalId);
-  }, [token]);
-
-  // 登录成功后同时更新 React 状态和 localStorage，刷新页面后可继续保持会话。
   const login = async (employeeId: string, password: string) => {
     const response = await api.post('/login', {
       employee_id: employeeId,
       password,
     });
 
-    const { token, user } = response.data;
-    setToken(token);
-    setUser(user);
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
+    const {
+      token: newToken,
+      user: newUser,
+      permissions: permissionPayload,
+    } = response.data;
+    const parsedPermissions = normalizePermissions(permissionPayload);
+
+    setToken(newToken);
+    setUser(newUser);
+    setPermissions(parsedPermissions);
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(newUser));
+    localStorage.setItem('permissions', JSON.stringify(parsedPermissions));
     updateLastActivity();
   };
 
-  // 登出必须同步清理 token、用户信息和活动时间，避免旧状态影响后续登录。
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('lastActivity');
-  };
+  const isAdmin = user?.role === 'admin' || user?.role === 'system_admin';
+  const isLineAdmin = user?.role === 'line_admin';
 
-  const isAdmin = user?.role === 'admin';
+  const hasPermission = useCallback(
+    (code: string): boolean => {
+      if (isAdmin) return true;
+      return permissions.codes.includes(code);
+    },
+    [isAdmin, permissions.codes],
+  );
+
+  const hasLinePermission = useCallback(
+    (lineId: number | string, action: string): boolean => {
+      if (isAdmin) return true;
+      const linePermission = permissions.lines[String(lineId)];
+      if (!linePermission) return false;
+
+      switch (action) {
+        case 'view':
+          return linePermission.can_view || linePermission.can_manage;
+        case 'download':
+          return linePermission.can_download || linePermission.can_manage;
+        case 'upload':
+          return linePermission.can_upload || linePermission.can_manage;
+        case 'manage':
+          return linePermission.can_manage;
+        default:
+          return false;
+      }
+    },
+    [isAdmin, permissions.lines],
+  );
+
+  const isLineManager = useCallback(
+    (lineId: number | string): boolean => {
+      if (isAdmin) return true;
+      return permissions.managed_line_ids.includes(String(lineId));
+    },
+    [isAdmin, permissions.managed_line_ids],
+  );
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isAdmin }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        login,
+        logout,
+        isAdmin,
+        isLineAdmin,
+        permissions,
+        hasPermission,
+        hasLinePermission,
+        isLineManager,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

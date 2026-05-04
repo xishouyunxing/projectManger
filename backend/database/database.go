@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -47,6 +48,13 @@ func migrationModels() []any {
 		&models.DepartmentPermission{},
 		&models.RoleDefaultPermission{},
 		&models.DepartmentDefaultPermission{},
+		&models.PermissionRule{},
+		&models.Role{},
+		&models.Permission{},
+		&models.RolePermission{},
+		&models.UserPermissionOverride{},
+		&models.RoleLinePermission{},
+		&models.LineAdminAssignment{},
 	}
 }
 
@@ -99,6 +107,10 @@ func ValidateSchema() error {
 		return fmt.Errorf("schema validation failed: table program_custom_field_values missing index idx_program_custom_field_values_program_field")
 	}
 
+	if !DB.Migrator().HasIndex(&models.PermissionRule{}, "idx_permission_rule_scope") {
+		return fmt.Errorf("schema validation failed: table permission_rules missing index idx_permission_rule_scope")
+	}
+
 	return nil
 }
 
@@ -107,5 +119,126 @@ func AutoMigrate() error {
 		return err
 	}
 
+	if err := migrateLegacyPermissionRules(); err != nil {
+		return err
+	}
+
 	return ValidateSchema()
+}
+
+func migrateLegacyPermissionRules() error {
+	if err := migrateUserPermissionRules(); err != nil {
+		return err
+	}
+	if err := migrateDepartmentPermissionRules(); err != nil {
+		return err
+	}
+	if err := migrateRoleLinePermissionRules(); err != nil {
+		return err
+	}
+	if err := migrateRoleDefaultPermissionRules(); err != nil {
+		return err
+	}
+	return migrateDepartmentDefaultPermissionRules()
+}
+
+func migrateUserPermissionRules() error {
+	var rows []models.UserPermission
+	if err := DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := upsertPermissionRuleSet(models.PermissionSubjectUser, row.UserID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateDepartmentPermissionRules() error {
+	var rows []models.DepartmentPermission
+	if err := DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := upsertPermissionRuleSet(models.PermissionSubjectDepartment, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateRoleLinePermissionRules() error {
+	var rows []models.RoleLinePermission
+	if err := DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := upsertPermissionRuleSet(models.PermissionSubjectRole, row.RoleID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateRoleDefaultPermissionRules() error {
+	var rows []models.RoleDefaultPermission
+	if err := DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := upsertPermissionRuleSet(models.PermissionSubjectRole, 0, row.Role, row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateDepartmentDefaultPermissionRules() error {
+	var rows []models.DepartmentDefaultPermission
+	if err := DB.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := upsertPermissionRuleSet(models.PermissionSubjectDepartmentDefault, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func upsertPermissionRuleSet(subjectType string, subjectID uint, subjectKey string, lineID uint, canView, canDownload, canUpload, canManage bool) error {
+	rules := []models.PermissionRule{
+		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionView, canView),
+		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionDownload, canDownload),
+		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionUpload, canUpload),
+		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionManage, canManage),
+	}
+	return DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "subject_type"},
+			{Name: "subject_id"},
+			{Name: "subject_key"},
+			{Name: "resource_type"},
+			{Name: "resource_id"},
+			{Name: "action"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"decision", "updated_at"}),
+	}).Create(&rules).Error
+}
+
+func buildPermissionRule(subjectType string, subjectID uint, subjectKey string, lineID uint, action string, allowed bool) models.PermissionRule {
+	decision := models.PermissionDecisionDeny
+	if allowed {
+		decision = models.PermissionDecisionAllow
+	}
+	return models.PermissionRule{
+		SubjectType:  subjectType,
+		SubjectID:    subjectID,
+		SubjectKey:   subjectKey,
+		ResourceType: models.PermissionResourceProductionLine,
+		ResourceID:   lineID,
+		Action:       action,
+		Decision:     decision,
+	}
 }

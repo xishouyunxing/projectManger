@@ -22,10 +22,12 @@ func InitAll() {
 	}
 
 	createDepartments()
+	createRoles()
+	createPermissions()
 	createAdmin(cfg)
 
 	log.Println("系统数据初始化完成")
-	log.Println("已初始化：数据库结构、部门、管理员账号")
+	log.Println("已初始化：数据库结构、部门、角色、权限、管理员账号")
 	log.Println("未初始化：工序、车型、生产线，请在系统中按业务需要手工录入")
 	log.Println("默认登录信息:")
 	log.Println("  工号: admin001")
@@ -39,6 +41,13 @@ func createAdmin(cfg *config.Config) {
 		return
 	}
 
+	// 查找 system_admin 角色
+	var adminRole models.Role
+	if err := database.DB.Where("name = ?", "system_admin").First(&adminRole).Error; err != nil {
+		log.Printf("查询 system_admin 角色失败: %v", err)
+		return
+	}
+
 	password := cfg.Auth.DefaultPassword
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -46,12 +55,14 @@ func createAdmin(cfg *config.Config) {
 		return
 	}
 
+	adminRoleID := adminRole.ID
 	admin := models.User{
 		EmployeeID:   "admin001",
 		EmployeeNo:   "admin001",
 		Name:         "系统管理员",
 		DepartmentID: &adminDepartment.ID,
-		Role:         "admin",
+		Role:         "system_admin",
+		RoleID:       &adminRoleID,
 		Password:     string(hashedPassword),
 		Status:       "active",
 	}
@@ -59,7 +70,12 @@ func createAdmin(cfg *config.Config) {
 	var existingUser models.User
 	result := database.DB.Where("employee_id = ?", admin.EmployeeID).First(&existingUser)
 	if result.Error == nil {
-		log.Printf("管理员账号已存在")
+		// 已存在则更新 role 和 role_id
+		database.DB.Model(&existingUser).Updates(map[string]interface{}{
+			"role":    "system_admin",
+			"role_id": adminRoleID,
+		})
+		log.Printf("管理员账号已存在，已更新角色关联")
 		return
 	}
 
@@ -69,6 +85,128 @@ func createAdmin(cfg *config.Config) {
 	}
 
 	log.Printf("创建管理员账号成功")
+}
+
+// createRoles 创建预设角色。
+func createRoles() {
+	roles := []models.Role{
+		{Name: "system_admin", Description: "系统管理员，全部权限", IsPreset: true, IsSystem: true, Status: "active", SortOrder: 1},
+		{Name: "line_admin", Description: "产线管理员，可管理指定产线并分配权限", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 2},
+		{Name: "engineer", Description: "工程师，产线查看/下载/上传", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 3},
+		{Name: "operator", Description: "操作员，产线查看/下载", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 4},
+		{Name: "viewer", Description: "访客，产线只读", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 5},
+	}
+
+	for _, role := range roles {
+		var existing models.Role
+		if database.DB.Where("name = ?", role.Name).First(&existing).Error == nil {
+			continue
+		}
+		database.DB.Create(&role)
+	}
+	log.Println("预设角色初始化完成")
+}
+
+// createPermissions 创建功能权限定义，并为预设角色分配默认权限。
+func createPermissions() {
+	// 定义所有功能权限
+	permissions := []models.Permission{
+		{Code: "page:dashboard", Name: "仪表盘", Type: "page", Resource: "dashboard"},
+		{Code: "page:programs", Name: "程序管理", Type: "page", Resource: "program"},
+		{Code: "page:program_matrix", Name: "程序矩阵", Type: "page", Resource: "program"},
+		{Code: "page:file_ignore_list", Name: "忽略文件列表", Type: "page", Resource: "file"},
+		{Code: "page:user_management", Name: "用户管理", Type: "page", Resource: "user"},
+		{Code: "page:production_lines", Name: "产线管理", Type: "page", Resource: "production_line"},
+		{Code: "page:vehicle_models", Name: "车型管理", Type: "page", Resource: "vehicle_model"},
+		{Code: "page:permissions", Name: "权限管理", Type: "page", Resource: "permission"},
+		{Code: "page:system_management", Name: "系统管理", Type: "page", Resource: "system"},
+		{Code: "op:program_create", Name: "创建程序", Type: "operation", Resource: "program"},
+		{Code: "op:program_edit", Name: "编辑程序", Type: "operation", Resource: "program"},
+		{Code: "op:program_delete", Name: "删除程序", Type: "operation", Resource: "program"},
+		{Code: "op:program_export", Name: "导出Excel", Type: "operation", Resource: "program"},
+		{Code: "op:file_upload", Name: "上传文件", Type: "operation", Resource: "file"},
+		{Code: "op:file_download", Name: "下载文件", Type: "operation", Resource: "file"},
+		{Code: "op:file_delete", Name: "删除文件", Type: "operation", Resource: "file"},
+		{Code: "op:version_create", Name: "创建版本", Type: "operation", Resource: "version"},
+		{Code: "op:version_manage", Name: "管理版本", Type: "operation", Resource: "version"},
+		{Code: "op:user_create", Name: "创建用户", Type: "operation", Resource: "user"},
+		{Code: "op:user_edit", Name: "编辑用户", Type: "operation", Resource: "user"},
+		{Code: "op:user_delete", Name: "删除用户", Type: "operation", Resource: "user"},
+		{Code: "op:password_reset", Name: "重置密码", Type: "operation", Resource: "user"},
+		{Code: "op:backup_restore", Name: "备份恢复", Type: "operation", Resource: "system"},
+		{Code: "op:line_permission_assign", Name: "分配产线权限", Type: "operation", Resource: "permission"},
+	}
+
+	for _, perm := range permissions {
+		var existing models.Permission
+		if database.DB.Where("code = ?", perm.Code).First(&existing).Error == nil {
+			continue
+		}
+		database.DB.Create(&perm)
+	}
+
+	// 为预设角色分配默认功能权限
+	assignDefaultRolePermissions()
+	log.Println("功能权限初始化完成")
+}
+
+// assignDefaultRolePermissions 为预设角色分配默认功能权限。
+func assignDefaultRolePermissions() {
+	// 加载所有权限
+	var allPerms []models.Permission
+	database.DB.Find(&allPerms)
+	permMap := map[string]uint{}
+	for _, p := range allPerms {
+		permMap[p.Code] = p.ID
+	}
+
+	// 定义每个角色的权限
+	rolePermDefs := map[string][]string{
+		"line_admin": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+			"page:permissions",
+			"op:program_create", "op:program_edit", "op:program_delete", "op:program_export",
+			"op:file_upload", "op:file_download", "op:file_delete",
+			"op:version_create", "op:version_manage",
+			"op:line_permission_assign",
+		},
+		"engineer": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+			"op:program_create", "op:program_edit", "op:program_export",
+			"op:file_upload", "op:file_download",
+			"op:version_create", "op:version_manage",
+		},
+		"operator": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+			"op:file_download",
+		},
+		"viewer": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+		},
+	}
+
+	for roleName, permCodes := range rolePermDefs {
+		var role models.Role
+		if err := database.DB.Where("name = ?", roleName).First(&role).Error; err != nil {
+			continue
+		}
+
+		for _, code := range permCodes {
+			permID, ok := permMap[code]
+			if !ok {
+				continue
+			}
+
+			var existing models.RolePermission
+			if database.DB.Where("role_id = ? AND permission_id = ?", role.ID, permID).First(&existing).Error == nil {
+				continue
+			}
+			database.DB.Create(&models.RolePermission{
+				RoleID:       role.ID,
+				PermissionID: permID,
+			})
+		}
+	}
 }
 
 func createDepartments() {

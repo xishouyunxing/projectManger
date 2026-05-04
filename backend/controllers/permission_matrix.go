@@ -3,6 +3,7 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"crane-system/services"
 	"errors"
 	"net/http"
 	"strings"
@@ -137,6 +138,13 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
+	if err := services.SavePermissionRuleChanges(
+		services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID},
+		permissionRuleChangesFromMatrixItems(req.Permissions, false),
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
@@ -224,6 +232,13 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
+	if err := services.SavePermissionRuleChanges(
+		services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID},
+		permissionRuleChangesFromMatrixItems(req.Permissions, false),
+	); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
@@ -306,6 +321,13 @@ func SaveRoleDefaultPermissionMatrix(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		return
+	}
+	if err := services.SavePermissionRuleChanges(
+		services.PermissionSubject{Type: models.PermissionSubjectRole, Key: role},
+		permissionRuleChangesFromMatrixItems(req.Permissions, true),
+	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
@@ -399,6 +421,13 @@ func SaveDepartmentDefaultPermissionMatrix(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		return
+	}
+	if err := services.SavePermissionRuleChanges(
+		services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: departmentID},
+		permissionRuleChangesFromMatrixItems(req.Permissions, true),
+	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
@@ -506,6 +535,20 @@ func validatePermissionMatrixLines(items []savePermissionMatrixItem) error {
 
 func permissionMatrixItemEmpty(item savePermissionMatrixItem) bool {
 	return !item.CanView && !item.CanDownload && !item.CanUpload && !item.CanManage
+}
+
+func permissionRuleChangesFromMatrixItems(items []savePermissionMatrixItem, emptyMeansUnset bool) []services.PermissionRuleChange {
+	changes := make([]services.PermissionRuleChange, 0, len(items)*4)
+	for _, item := range items {
+		unset := item.Inherit || (emptyMeansUnset && permissionMatrixItemEmpty(item))
+		changes = append(changes,
+			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionView, item.CanView, unset),
+			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionDownload, item.CanDownload, unset),
+			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionUpload, item.CanUpload, unset),
+			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionManage, item.CanManage, unset),
+		)
+	}
+	return changes
 }
 
 // permissionMatrixUpdates 只生成四个权限位的更新内容。
