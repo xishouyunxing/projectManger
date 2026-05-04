@@ -24,6 +24,7 @@ const PermissionManagement = lazy(() => import('./pages/PermissionManagement'));
 const SystemManagement = lazy(() => import('./pages/SystemManagement'));
 const FileIgnoreList = lazy(() => import('./pages/FileIgnoreList'));
 const ProgramMatrixPreview = lazy(() => import('./pages/ProgramMatrixPreview'));
+const DataExportCenter = lazy(() => import('./pages/DataExportCenter'));
 
 // 设置dayjs语言为中文
 dayjs.locale('zh-cn');
@@ -103,6 +104,10 @@ function App() {
                   <Route
                     path="program-matrix"
                     element={<ProgramMatrixPreview />}
+                  />
+                  <Route
+                    path="data-export"
+                    element={<DataExportCenter />}
                   />
                 </Route>
               </Routes>

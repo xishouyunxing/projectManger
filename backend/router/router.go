@@ -81,7 +81,10 @@ func SetupRouter() *gin.Engine {
 		programs := protected.Group("/programs")
 		{
 			programs.GET("", controllers.GetPrograms)
-			programs.GET("/export/excel", controllers.ExportProgramsExcel)
+			programs.GET("/export/columns", controllers.GetExportColumns)
+			programs.GET("/export/preview", controllers.ExportPreview)
+			programs.GET("/export/stats", controllers.ExportStats)
+			programs.GET("/export/excel", controllers.ExportProgramsExcelDynamic)
 			programs.GET("/:id", controllers.GetProgram)
 			programs.POST("", controllers.CreateProgram)
 			programs.PUT("/:id", controllers.UpdateProgram)

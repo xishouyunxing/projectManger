@@ -217,7 +217,7 @@ const Dashboard = () => {
     }
   };
 
-  const quickActions = [
+  const quickActions: { title: string; icon: React.ReactNode; color: string; path?: string; onClick?: () => void }[] = [
     {
       title: '新建程序',
       icon: <FileTextOutlined />,
@@ -243,10 +243,10 @@ const Dashboard = () => {
       path: '/vehicle-models',
     },
     {
-      title: '数据预览',
+      title: '数据导出',
       icon: <FileExcelOutlined />,
       color: '#13c2c2',
-      onClick: () => setCurrentPage('preview'),
+      path: '/data-export',
     },
     ...(isAdmin
       ? [

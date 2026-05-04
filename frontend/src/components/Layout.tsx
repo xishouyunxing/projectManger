@@ -26,6 +26,7 @@ import {
   ControlOutlined,
   KeyOutlined,
   SearchOutlined,
+  FileExcelOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
@@ -73,6 +74,7 @@ const Layout = () => {
     '/users': () => import('../pages/UserManagement'),
     '/permissions': () => import('../pages/PermissionManagement'),
     '/system-management': () => import('../pages/SystemManagement'),
+    '/data-export': () => import('../pages/DataExportCenter'),
   };
 
   const prefetchRoute = (routePath: string) => {
@@ -103,6 +105,11 @@ const Layout = () => {
       key: '/programs',
       icon: <FileTextOutlined />,
       label: routeLabel('/programs', '程序管理'),
+    },
+    {
+      key: '/data-export',
+      icon: <FileExcelOutlined />,
+      label: routeLabel('/data-export', '数据导出'),
     },
     {
       key: '/vehicle-models',
