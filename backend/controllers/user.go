@@ -183,6 +183,7 @@ func CreateUser(c *gin.Context) {
 		Name:         req.Name,
 		DepartmentID: req.DepartmentID,
 		Role:         req.Role,
+		RoleID:       resolveRoleID(req.Role),
 		Password:     string(hashedPassword),
 		Status:       req.Status,
 	}
@@ -325,6 +326,7 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 				return nil, err
 			}
 			updates["role"] = value
+			updates["role_id"] = resolveRoleID(value)
 		case "status":
 			if !isAdmin {
 				continue
@@ -348,10 +350,38 @@ func buildUserUpdates(payload map[string]json.RawMessage, isAdmin bool) (map[str
 }
 
 func validateUserRoleValue(role string) error {
-	if role != "admin" && role != "user" {
+	// 兼容旧角色名 + 新角色体系
+	validRoles := map[string]bool{
+		"admin":        true, // 旧角色，运行时映射到 system_admin
+		"user":         true, // 旧角色，运行时映射到 viewer
+		"system_admin": true,
+		"line_admin":   true,
+		"engineer":     true,
+		"operator":     true,
+		"viewer":       true,
+	}
+	if !validRoles[role] {
 		return invalidUserFieldValue("role")
 	}
 	return nil
+}
+
+// resolveRoleID 在 Go 层通过角色名查找 Role 表获取 role_id。
+// 旧角色名自动映射：admin → system_admin，user → viewer。
+// 查不到则返回 nil，不阻塞用户创建。
+func resolveRoleID(roleName string) *uint {
+	legacyMap := map[string]string{
+		"admin": "system_admin",
+		"user":  "viewer",
+	}
+	if mapped, ok := legacyMap[roleName]; ok {
+		roleName = mapped
+	}
+	var role models.Role
+	if err := database.DB.Where("name = ?", roleName).First(&role).Error; err != nil {
+		return nil
+	}
+	return &role.ID
 }
 
 func validateUserStatusValue(status string) error {

@@ -4,6 +4,7 @@ import (
 	"crane-system/config"
 	"crane-system/models"
 	"fmt"
+	"log"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -59,16 +60,56 @@ func migrationModels() []any {
 }
 
 func ensureTables() error {
-	for _, model := range migrationModels() {
-		if DB.Migrator().HasTable(model) {
-			continue
-		}
+	return DB.AutoMigrate(migrationModels()...)
+}
 
-		if err := DB.Migrator().CreateTable(model); err != nil {
-			return err
-		}
+// backfillUserRoleIDs 在 Go 层完成 role 字符串 → role_id 的映射。
+// 旧数据中用户只有 role 字段（如 "admin"），没有 role_id。
+// 这里根据 role 名称查找 Role 表，自动回填 role_id。
+// 旧角色名映射：admin → system_admin，其余保持原名。
+func backfillUserRoleIDs() error {
+	// 跳过：role_id 列尚不存在（AutoMigrate 会加列，但回填应在加列之后）
+	if !DB.Migrator().HasColumn(&models.User{}, "role_id") {
+		return nil
 	}
 
+	// 加载所有角色到 map[name]ID
+	var roles []models.Role
+	if err := DB.Find(&roles).Error; err != nil {
+		return fmt.Errorf("加载角色列表失败: %w", err)
+	}
+	roleMap := map[string]uint{}
+	for _, r := range roles {
+		roleMap[r.Name] = r.ID
+	}
+
+	// 旧角色名 → 新角色名
+	legacyMap := map[string]string{
+		"admin": "system_admin",
+		"user":  "viewer",
+	}
+
+	// 查询所有 role_id 为空的用户
+	var users []models.User
+	if err := DB.Where("role_id IS NULL").Find(&users).Error; err != nil {
+		return fmt.Errorf("查询待回填用户失败: %w", err)
+	}
+
+	for _, u := range users {
+		roleName := u.Role
+		if mapped, ok := legacyMap[roleName]; ok {
+			roleName = mapped
+		}
+		roleID, ok := roleMap[roleName]
+		if !ok {
+			continue // 未知角色，跳过
+		}
+		DB.Model(&models.User{}).Where("id = ?", u.ID).Update("role_id", roleID)
+	}
+
+	if len(users) > 0 {
+		log.Printf("已回填 %d 个用户的 role_id", len(users))
+	}
 	return nil
 }
 
@@ -116,6 +157,10 @@ func ValidateSchema() error {
 
 func AutoMigrate() error {
 	if err := ensureTables(); err != nil {
+		return err
+	}
+
+	if err := backfillUserRoleIDs(); err != nil {
 		return err
 	}
 
