@@ -51,17 +51,7 @@ func migrationModels() []any {
 }
 
 func ensureTables() error {
-	for _, model := range migrationModels() {
-		if DB.Migrator().HasTable(model) {
-			continue
-		}
-
-		if err := DB.Migrator().CreateTable(model); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return DB.AutoMigrate(migrationModels()...)
 }
 
 func ValidateSchema() error {
