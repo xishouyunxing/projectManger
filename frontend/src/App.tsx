@@ -8,6 +8,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import PrivateRoute from './components/PrivateRoute';
 import PermissionRoute from './components/PermissionRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const Layout = lazy(() => import('./components/Layout'));
 const Login = lazy(() => import('./pages/Login'));
@@ -41,6 +42,7 @@ function App() {
               </div>
             }
           >
+            <ErrorBoundary>
             <BrowserRouter
               future={{
                 v7_startTransition: true,
@@ -112,6 +114,7 @@ function App() {
                 </Route>
               </Routes>
             </BrowserRouter>
+            </ErrorBoundary>
           </Suspense>
         </AuthProvider>
       </ThemeProvider>

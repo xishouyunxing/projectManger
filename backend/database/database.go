@@ -4,7 +4,8 @@ import (
 	"crane-system/config"
 	"crane-system/models"
 	"fmt"
-	"log"
+	"log/slog"
+	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -25,10 +26,42 @@ func Connect() error {
 
 	var err error
 	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(gormLogLevel()),
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	sqlDB, err := DB.DB()
+	if err != nil {
+		return fmt.Errorf("获取底层数据库连接失败: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(3 * time.Minute)
+
+	return nil
+}
+
+// gormLogLevel 根据 APP_ENV 返回合适的 GORM 日志级别。
+func gormLogLevel() logger.LogLevel {
+	if config.AppConfig != nil && config.AppConfig.App.Env == "production" {
+		return logger.Warn
+	}
+	return logger.Info
+}
+
+// Close 关闭数据库连接池。
+func Close() error {
+	if DB == nil {
+		return nil
+	}
+	sqlDB, err := DB.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func migrationModels() []any {
@@ -108,7 +141,7 @@ func backfillUserRoleIDs() error {
 	}
 
 	if len(users) > 0 {
-		log.Printf("已回填 %d 个用户的 role_id", len(users))
+		slog.Info("已回填用户的 role_id", "count", len(users))
 	}
 	return nil
 }

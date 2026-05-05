@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,7 @@ import (
 
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
+	r.MaxMultipartMemory = 10 << 20 // 10MB 默认上传限制
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     config.AppConfig.CORS.AllowedOrigins,
@@ -25,13 +27,21 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
+	// 全局限流：每 IP 每秒 100 请求
+	r.Use(middleware.RateLimiter(100, 200))
+
 	public := r.Group("/api")
 	{
-		public.POST("/login", controllers.Login)
+		public.GET("/health", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		})
+		// 登录接口限流：每 IP 每分钟 5 次（防暴力破解）
+		public.POST("/login", middleware.RateLimiter(5.0/60, 5), controllers.Login)
 	}
 
 	protected := r.Group("/api")
 	protected.Use(middleware.AuthMiddleware())
+	protected.Use(middleware.RequestTimeout(30 * time.Second))
 	{
 		users := protected.Group("/users")
 		{
