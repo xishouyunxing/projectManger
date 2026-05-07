@@ -242,6 +242,9 @@ func migrateLegacyPermissionRules() error {
 }
 
 func migrateUserPermissionRules() error {
+	if !DB.Migrator().HasTable(&models.UserPermission{}) {
+		return nil
+	}
 	var rows []models.UserPermission
 	if err := DB.Find(&rows).Error; err != nil {
 		return err
@@ -255,6 +258,9 @@ func migrateUserPermissionRules() error {
 }
 
 func migrateDepartmentPermissionRules() error {
+	if !DB.Migrator().HasTable(&models.DepartmentPermission{}) {
+		return nil
+	}
 	var rows []models.DepartmentPermission
 	if err := DB.Find(&rows).Error; err != nil {
 		return err
@@ -268,6 +274,9 @@ func migrateDepartmentPermissionRules() error {
 }
 
 func migrateRoleLinePermissionRules() error {
+	if !DB.Migrator().HasTable(&models.RoleLinePermission{}) {
+		return nil
+	}
 	var rows []models.RoleLinePermission
 	if err := DB.Find(&rows).Error; err != nil {
 		return err
@@ -281,6 +290,9 @@ func migrateRoleLinePermissionRules() error {
 }
 
 func migrateRoleDefaultPermissionRules() error {
+	if !DB.Migrator().HasTable(&models.RoleDefaultPermission{}) {
+		return nil
+	}
 	var rows []models.RoleDefaultPermission
 	if err := DB.Find(&rows).Error; err != nil {
 		return err
@@ -294,6 +306,9 @@ func migrateRoleDefaultPermissionRules() error {
 }
 
 func migrateDepartmentDefaultPermissionRules() error {
+	if !DB.Migrator().HasTable(&models.DepartmentDefaultPermission{}) {
+		return nil
+	}
 	var rows []models.DepartmentDefaultPermission
 	if err := DB.Find(&rows).Error; err != nil {
 		return err
