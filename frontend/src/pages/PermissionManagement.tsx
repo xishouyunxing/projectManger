@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
+  ConfigProvider,
   Segmented,
   Select,
   Space,
@@ -78,6 +79,22 @@ type MatrixEditorProps = {
   emptyText: string;
 };
 
+/* ────────────────── 统一 Select 主题 ────────────────── */
+
+const selectTheme = {
+  components: {
+    Select: {
+      controlHeight: 36,
+      borderRadius: 8,
+      colorBorder: 'transparent',
+      colorPrimaryHover: 'transparent',
+      controlOutline: 'none',
+    },
+  },
+};
+
+/* ────────────────── 常量 ────────────────── */
+
 const actionConfigs: Array<{ key: ActionKey; label: string }> = [
   { key: 'view', label: '查看' },
   { key: 'download', label: '下载' },
@@ -122,6 +139,8 @@ const decisionLabels: Record<Decision | 'allow' | 'deny', string> = {
   allow: '允许',
   deny: '拒绝',
 };
+
+/* ────────────────── 工具函数 ────────────────── */
 
 const makeCellKey = (lineId: number, action: ActionKey) => `${lineId}:${action}`;
 
@@ -176,6 +195,8 @@ const getVisibleResult = (
     sourceLabel: sourceLabels[cell.source] || cell.source_label || '系统默认',
   };
 };
+
+/* ────────────────── 权限矩阵编辑器 ────────────────── */
 
 const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
   const [rows, setRows] = useState<PermissionMatrixLine[]>([]);
@@ -286,7 +307,10 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
           return (
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
               <Space size={6}>
-                <Tag color={visible.result === 'allow' ? 'green' : 'red'}>
+                <Tag
+                  color={visible.result === 'allow' ? 'green' : 'red'}
+                  style={{ borderRadius: 4, fontWeight: 600, fontSize: 12 }}
+                >
                   {visible.label}
                 </Tag>
                 <Text type="secondary" style={{ fontSize: 12 }}>
@@ -321,12 +345,24 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <Text type="secondary">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text type="secondary" style={{ fontSize: 13 }}>
           每个单元格都可以设置为按规则、允许或拒绝。保存时只提交改动过的单元格。
         </Text>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={loadMatrix} loading={loading}>
+        <Space size={10}>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={loadMatrix}
+            loading={loading}
+            style={{
+              height: 36,
+              borderRadius: 8,
+              background: '#dee3e6',
+              color: '#2d3335',
+              fontWeight: 700,
+              border: 'none',
+            }}
+          >
             刷新
           </Button>
           <Button
@@ -335,12 +371,25 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
             disabled={changedCount === 0}
             loading={saving}
             onClick={handleSave}
+            style={{
+              height: 36,
+              borderRadius: 8,
+              background: changedCount > 0
+                ? 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)'
+                : undefined,
+              border: 'none',
+              fontWeight: 700,
+              boxShadow: changedCount > 0
+                ? '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)'
+                : undefined,
+            }}
           >
             保存{changedCount > 0 ? ` ${changedCount} 项` : ''}
           </Button>
         </Space>
       </div>
       <Table
+        className="custom-table"
         columns={columns}
         dataSource={rows}
         rowKey="resource_id"
@@ -352,6 +401,8 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
     </Space>
   );
 };
+
+/* ────────────────── Tab: 用户权限 ────────────────── */
 
 const UserPermissionTab = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -375,28 +426,34 @@ const UserPermissionTab = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space wrap>
-        <Text strong>用户</Text>
-        <Select
-          aria-label="选择用户"
-          style={{ width: 280 }}
-          loading={loading}
-          showSearch
-          optionFilterProp="label"
-          value={selectedUserId}
-          onChange={setSelectedUserId}
-          options={users.map((user) => ({
-            value: user.id,
-            label: `${user.name}${user.employee_id ? ` (${user.employee_id})` : ''}`,
-          }))}
-        />
-        {selectedUser ? (
-          <Text type="secondary">
-            {selectedUser.department?.name || '未分配部门'} /{' '}
-            {roleLabels[selectedUser.role || ''] || selectedUser.role || '未分配角色'}
-          </Text>
-        ) : null}
-      </Space>
+      <ConfigProvider theme={selectTheme}>
+        <div className="management-filter-panel">
+          <div className="management-filter-field" style={{ width: 300 }}>
+            <div className="management-filter-label">用户</div>
+            <Select
+              aria-label="选择用户"
+              style={{ width: '100%' }}
+              loading={loading}
+              showSearch
+              optionFilterProp="label"
+              value={selectedUserId}
+              onChange={setSelectedUserId}
+              options={users.map((user) => ({
+                value: user.id,
+                label: `${user.name}${user.employee_id ? ` (${user.employee_id})` : ''}`,
+              }))}
+            />
+          </div>
+          {selectedUser && (
+            <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 2 }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                {selectedUser.department?.name || '未分配部门'} ·{' '}
+                {roleLabels[selectedUser.role || ''] || selectedUser.role || '未分配角色'}
+              </Text>
+            </div>
+          )}
+        </div>
+      </ConfigProvider>
       <MatrixEditor
         mode="user"
         targetId={selectedUserId}
@@ -405,6 +462,8 @@ const UserPermissionTab = () => {
     </Space>
   );
 };
+
+/* ────────────────── Tab: 部门规则 ────────────────── */
 
 const DepartmentRuleTab = () => {
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -426,22 +485,23 @@ const DepartmentRuleTab = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space wrap>
-        <Text strong>部门</Text>
-        <Select
-          aria-label="选择部门"
-          style={{ width: 260 }}
-          loading={loading}
-          showSearch
-          optionFilterProp="label"
-          value={selectedDepartmentId}
-          onChange={setSelectedDepartmentId}
-          options={departments.map((department) => ({
-            value: department.id,
-            label: department.name,
-          }))}
-        />
-      </Space>
+      <ConfigProvider theme={selectTheme}>
+        <div className="management-filter-panel">
+          <div className="management-filter-field" style={{ width: 260 }}>
+            <div className="management-filter-label">部门</div>
+            <Select
+              aria-label="选择部门"
+              style={{ width: '100%' }}
+              loading={loading}
+              showSearch
+              optionFilterProp="label"
+              value={selectedDepartmentId}
+              onChange={setSelectedDepartmentId}
+              options={departments.map((d) => ({ value: d.id, label: d.name }))}
+            />
+          </div>
+        </div>
+      </ConfigProvider>
       <MatrixEditor
         mode="department"
         targetId={selectedDepartmentId}
@@ -450,6 +510,8 @@ const DepartmentRuleTab = () => {
     </Space>
   );
 };
+
+/* ────────────────── Tab: 角色规则 ────────────────── */
 
 const RoleRuleTab = () => {
   const [roles, setRoles] = useState<Role[]>([]);
@@ -471,22 +533,26 @@ const RoleRuleTab = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space wrap>
-        <Text strong>角色</Text>
-        <Select
-          aria-label="选择角色"
-          style={{ width: 260 }}
-          loading={loading}
-          showSearch
-          optionFilterProp="label"
-          value={selectedRoleId}
-          onChange={setSelectedRoleId}
-          options={roles.map((role) => ({
-            value: role.id,
-            label: role.display_name || roleLabels[role.name] || role.name,
-          }))}
-        />
-      </Space>
+      <ConfigProvider theme={selectTheme}>
+        <div className="management-filter-panel">
+          <div className="management-filter-field" style={{ width: 260 }}>
+            <div className="management-filter-label">角色</div>
+            <Select
+              aria-label="选择角色"
+              style={{ width: '100%' }}
+              loading={loading}
+              showSearch
+              optionFilterProp="label"
+              value={selectedRoleId}
+              onChange={setSelectedRoleId}
+              options={roles.map((role) => ({
+                value: role.id,
+                label: role.display_name || roleLabels[role.name] || role.name,
+              }))}
+            />
+          </div>
+        </div>
+      </ConfigProvider>
       <MatrixEditor
         mode="role"
         targetId={selectedRoleId}
@@ -495,6 +561,8 @@ const RoleRuleTab = () => {
     </Space>
   );
 };
+
+/* ────────────────── Tab: 部门默认规则 ────────────────── */
 
 const DepartmentDefaultRuleTab = () => {
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -516,22 +584,23 @@ const DepartmentDefaultRuleTab = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space wrap>
-        <Text strong>部门</Text>
-        <Select
-          aria-label="选择默认规则部门"
-          style={{ width: 260 }}
-          loading={loading}
-          showSearch
-          optionFilterProp="label"
-          value={selectedDepartmentId}
-          onChange={setSelectedDepartmentId}
-          options={departments.map((department) => ({
-            value: department.id,
-            label: department.name,
-          }))}
-        />
-      </Space>
+      <ConfigProvider theme={selectTheme}>
+        <div className="management-filter-panel">
+          <div className="management-filter-field" style={{ width: 260 }}>
+            <div className="management-filter-label">部门</div>
+            <Select
+              aria-label="选择默认规则部门"
+              style={{ width: '100%' }}
+              loading={loading}
+              showSearch
+              optionFilterProp="label"
+              value={selectedDepartmentId}
+              onChange={setSelectedDepartmentId}
+              options={departments.map((d) => ({ value: d.id, label: d.name }))}
+            />
+          </div>
+        </div>
+      </ConfigProvider>
       <MatrixEditor
         mode="departmentDefault"
         targetId={selectedDepartmentId}
@@ -540,6 +609,8 @@ const DepartmentDefaultRuleTab = () => {
     </Space>
   );
 };
+
+/* ────────────────── 主页面 ────────────────── */
 
 const PermissionManagement = () => (
   <div className="management-page">
