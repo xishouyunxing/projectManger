@@ -15,7 +15,6 @@ import type { TableColumnsType } from 'antd';
 import {
   ApartmentOutlined,
   ReloadOutlined,
-  SafetyCertificateOutlined,
   SaveOutlined,
   TeamOutlined,
   UserOutlined,
@@ -543,55 +542,65 @@ const DepartmentDefaultRuleTab = () => {
 };
 
 const PermissionManagement = () => (
-  <div className="management-table-card">
-    <Title level={4} style={{ marginTop: 0, marginBottom: 20 }}>
-      <SafetyCertificateOutlined style={{ marginRight: 8 }} />
-      权限管理
-    </Title>
-    <Tabs
-      items={[
-        {
-          key: 'users',
-          label: (
-            <span>
-              <UserOutlined />
-              用户权限
-            </span>
-          ),
-          children: <UserPermissionTab />,
-        },
-        {
-          key: 'departments',
-          label: (
-            <span>
-              <ApartmentOutlined />
-              部门规则
-            </span>
-          ),
-          children: <DepartmentRuleTab />,
-        },
-        {
-          key: 'roles',
-          label: (
-            <span>
-              <TeamOutlined />
-              角色规则
-            </span>
-          ),
-          children: <RoleRuleTab />,
-        },
-        {
-          key: 'department-defaults',
-          label: (
-            <span>
-              <ApartmentOutlined />
-              部门默认规则
-            </span>
-          ),
-          children: <DepartmentDefaultRuleTab />,
-        },
-      ]}
-    />
+  <div className="management-page">
+    <div className="management-page-header">
+      <div>
+        <div className="management-page-breadcrumb">
+          <span>系统</span>
+          <span style={{ margin: '0 8px', fontFamily: 'Inter, sans-serif' }}>/</span>
+          <span className="active">权限管理</span>
+        </div>
+        <Title level={2} className="management-page-title">
+          权限管理
+        </Title>
+      </div>
+    </div>
+    <div className="management-table-card" style={{ padding: '24px' }}>
+      <Tabs
+        items={[
+          {
+            key: 'users',
+            label: (
+              <span>
+                <UserOutlined />
+                用户权限
+              </span>
+            ),
+            children: <UserPermissionTab />,
+          },
+          {
+            key: 'departments',
+            label: (
+              <span>
+                <ApartmentOutlined />
+                部门规则
+              </span>
+            ),
+            children: <DepartmentRuleTab />,
+          },
+          {
+            key: 'roles',
+            label: (
+              <span>
+                <TeamOutlined />
+                角色规则
+              </span>
+            ),
+            children: <RoleRuleTab />,
+          },
+          {
+            key: 'department-defaults',
+            label: (
+              <span>
+                <ApartmentOutlined />
+                部门默认规则
+              </span>
+            ),
+            children: <DepartmentDefaultRuleTab />,
+          },
+        ]}
+      />
+    </div>
   </div>
 );
 
