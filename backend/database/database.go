@@ -5,6 +5,7 @@ import (
 	"crane-system/models"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -93,7 +94,27 @@ func migrationModels() []any {
 }
 
 func ensureTables() error {
-	return DB.AutoMigrate(migrationModels()...)
+	// 逐模型迁移，容忍 "Can't DROP" 类错误（GORM 版本升级时索引命名变更导致）
+	for _, m := range migrationModels() {
+		if err := DB.AutoMigrate(m); err != nil {
+			if isIgnorableMigrateError(err) {
+				slog.Warn("AutoMigrate 跳过可忽略错误", "model", fmt.Sprintf("%T", m), "error", err)
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// isIgnorableMigrateError 判断迁移错误是否可安全忽略。
+// GORM 在升级索引命名时会尝试 DROP 旧约束，若已不存在则报 MySQL 1091 错误。
+func isIgnorableMigrateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Can't DROP") && strings.Contains(msg, "check that column/key exists")
 }
 
 // backfillUserRoleIDs 在 Go 层完成 role 字符串 → role_id 的映射。
