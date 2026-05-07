@@ -5,7 +5,6 @@ import (
 	"crane-system/models"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -94,27 +93,38 @@ func migrationModels() []any {
 }
 
 func ensureTables() error {
-	// 逐模型迁移，容忍 "Can't DROP" 类错误（GORM 版本升级时索引命名变更导致）
-	for _, m := range migrationModels() {
+	models := migrationModels()
+	var failed []string
+
+	// 逐模型迁移，记录失败的模型但不阻塞后续建表
+	for _, m := range models {
 		if err := DB.AutoMigrate(m); err != nil {
-			if isIgnorableMigrateError(err) {
-				slog.Warn("AutoMigrate 跳过可忽略错误", "model", fmt.Sprintf("%T", m), "error", err)
-				continue
+			slog.Warn("AutoMigrate 模型失败，将重试", "model", fmt.Sprintf("%T", m), "error", err)
+			// 重试一次：可能是 GORM 尝试 DROP 旧约束时先失败，但第二次表已部分创建
+			if retryErr := DB.AutoMigrate(m); retryErr != nil {
+				slog.Error("AutoMigrate 模型重试仍失败", "model", fmt.Sprintf("%T", m), "error", retryErr)
+				failed = append(failed, fmt.Sprintf("%T", m))
 			}
-			return err
 		}
 	}
-	return nil
-}
 
-// isIgnorableMigrateError 判断迁移错误是否可安全忽略。
-// GORM 在升级索引命名时会尝试 DROP 旧约束，若已不存在则报 MySQL 1091 错误。
-func isIgnorableMigrateError(err error) bool {
-	if err == nil {
-		return false
+	// 验证所有表是否已创建
+	var missing []string
+	for _, m := range models {
+		if !DB.Migrator().HasTable(m) {
+			missing = append(missing, fmt.Sprintf("%T", m))
+		}
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "Can't DROP") && strings.Contains(msg, "check that column/key exists")
+
+	if len(missing) > 0 {
+		return fmt.Errorf("以下模型的表未成功创建: %v", missing)
+	}
+
+	if len(failed) > 0 {
+		slog.Warn("部分模型迁移时遇到错误（表已创建）", "models", failed)
+	}
+
+	return nil
 }
 
 // backfillUserRoleIDs 在 Go 层完成 role 字符串 → role_id 的映射。
