@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
-import api from '../../services/api';
+import { programApi } from './programApi';
 import { buildEnabledCustomFields, normalizeCustomFieldValues } from './utils';
 import type {
   Program,
@@ -62,21 +62,19 @@ export const useProgramManagementData = ({
           .map(([fieldId, value]) => [`custom_field_${fieldId}`, value]),
       );
 
-      const programsRes = await api.get('/programs', {
-        params: {
-          page: programPage,
-          page_size: programPageSize,
-          keyword: searchKeyword || undefined,
-          production_line_id: filterProductionLine || undefined,
-          vehicle_model_id: filterVehicleModel || undefined,
-          status: filterStatus || undefined,
-          date_from: filterDateRange[0] || undefined,
-          date_to: filterDateRange[1] || undefined,
-          ...customFieldParams,
-        },
+      const programsRes = await programApi.listPrograms({
+        page: programPage,
+        page_size: programPageSize,
+        keyword: searchKeyword || undefined,
+        production_line_id: filterProductionLine || undefined,
+        vehicle_model_id: filterVehicleModel || undefined,
+        status: filterStatus || undefined,
+        date_from: filterDateRange[0] || undefined,
+        date_to: filterDateRange[1] || undefined,
+        ...customFieldParams,
       });
-      setPrograms(programsRes.data?.items || programsRes.data || []);
-      setProgramTotal(Number(programsRes.data?.total) || 0);
+      setPrograms(programsRes.items);
+      setProgramTotal(programsRes.total);
     } catch (error) {
       console.error('Failed to load data:', error);
       message.error('加载数据失败，请刷新重试');
@@ -90,43 +88,34 @@ export const useProgramManagementData = ({
     page = 1,
     pageSize = versionsPageSize,
   ) => {
-    const response = await api.get(`/files/program/${programId}`, {
-      params: {
-        page,
-        page_size: pageSize,
-      },
-    });
-    const nextVersions = response.data?.versions || [];
-    setVersions(nextVersions);
-    setVersionsPage(Number(response.data?.page) || page);
-    setVersionsPageSize(Number(response.data?.page_size) || pageSize);
-    setVersionsTotal(
-      Number(response.data?.total_versions) || nextVersions.length,
+    const response = await programApi.listProgramVersions(
+      programId,
+      page,
+      pageSize,
     );
+    const nextVersions = response.versions;
+    setVersions(nextVersions);
+    setVersionsPage(response.page);
+    setVersionsPageSize(response.pageSize);
+    setVersionsTotal(response.totalVersions);
     return nextVersions;
   };
 
   const loadCustomFields = async (productionLineId: number) => {
-    const response = await api.get(
-      `/production-lines/${productionLineId}/custom-fields`,
-    );
-    return buildEnabledCustomFields(response.data);
+    const response = await programApi.listCustomFields(productionLineId);
+    return buildEnabledCustomFields(response);
   };
 
   // 选择器数据用于筛选和表单下拉，进入页面加载一次即可。
   // 如后续支持在本页新增产线/车型，再在对应成功回调中主动刷新。
   const loadSelectorData = async () => {
     try {
-      const [linesRes, modelsRes] = await Promise.all([
-        api.get('/production-lines'),
-        api.get('/vehicle-models', {
-          params: {
-            scope: 'selector',
-          },
-        }),
+      const [lines, models] = await Promise.all([
+        programApi.listProductionLines(),
+        programApi.listVehicleModelsForSelector(),
       ]);
-      setProductionLines(linesRes.data);
-      setVehicleModels(modelsRes.data);
+      setProductionLines(lines);
+      setVehicleModels(models);
     } catch (error) {
       console.error('Failed to load selector data:', error);
       message.error('加载筛选数据失败，请刷新重试');

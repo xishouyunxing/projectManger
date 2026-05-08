@@ -46,7 +46,6 @@ import {
   FileTextOutlined,
   LeftOutlined,
 } from '@ant-design/icons';
-import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import ProgramHeader from './program-management/ProgramHeader';
 import ProgramFilterPanel from './program-management/ProgramFilterPanel';
@@ -61,6 +60,7 @@ import {
   normalizeCustomFieldValues,
   parseCustomFieldOptions,
 } from './program-management/utils';
+import { programApi } from './program-management/programApi';
 import type {
   BatchImportPreview,
   BatchImportStatus,
@@ -277,23 +277,19 @@ const ProgramManagement = () => {
     const loadMappingCandidates = async () => {
       try {
         // 候选列表只取前 50 条，后续如需大规模选择应改成服务端分页选择器。
-        const response = await api.get('/programs', {
-          params: {
-            page: 1,
-            page_size: 50,
-            keyword: debouncedMappingSearchKeyword || undefined,
-            production_line_id: mappingFilterProductionLine || undefined,
-            vehicle_model_id: mappingFilterVehicleModel || undefined,
-            status: mappingFilterStatus || undefined,
-          },
+        const candidates = await programApi.listMappingCandidates({
+          page: 1,
+          page_size: 50,
+          keyword: debouncedMappingSearchKeyword || undefined,
+          production_line_id: mappingFilterProductionLine || undefined,
+          vehicle_model_id: mappingFilterVehicleModel || undefined,
+          status: mappingFilterStatus || undefined,
         });
         if (cancelled) {
           return;
         }
 
-        setMappingCandidatePrograms(
-          response.data?.items || response.data || [],
-        );
+        setMappingCandidatePrograms(candidates);
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load mapping candidates:', error);
@@ -360,10 +356,7 @@ const ProgramManagement = () => {
         }
       });
 
-      const response = await api.get('/programs/export/excel', {
-        params,
-        responseType: 'blob',
-      });
+      const response = await programApi.exportExcel(params);
 
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
@@ -395,10 +388,8 @@ const ProgramManagement = () => {
     setCurrentProgram(record);
     setModalLoading(true);
     try {
-      const response = await api.get(
-        `/program-mappings/by-parent/${record.id}`,
-      );
-      setRelatedPrograms(response.data || []);
+      const mappings = await programApi.listProgramMappings(record.id);
+      setRelatedPrograms(mappings);
       setRelationDrawerVisible(true);
     } catch (error) {
       console.error('Failed to load mappings:', error);
@@ -411,11 +402,9 @@ const ProgramManagement = () => {
 
   const handleAddRelation = async (values: any) => {
     try {
-      await api.post(
-        `/program-mappings?parent_program_id=${currentProgram?.id}`,
-        {
-          child_program_ids: values.child_program_ids,
-        },
+      await programApi.addProgramMappings(
+        currentProgram?.id || 0,
+        values.child_program_ids,
       );
       message.success('映射成功');
       setAddRelationModalVisible(false);
@@ -426,10 +415,10 @@ const ProgramManagement = () => {
       setMappingFilterVehicleModel(null);
       setMappingFilterStatus(null);
       if (currentProgram) {
-        const response = await api.get(
-          `/program-mappings/by-parent/${currentProgram.id}`,
+        const mappings = await programApi.listProgramMappings(
+          currentProgram.id,
         );
-        setRelatedPrograms(response.data || []);
+        setRelatedPrograms(mappings);
       }
       await loadData();
     } catch (error: any) {
@@ -440,13 +429,13 @@ const ProgramManagement = () => {
 
   const handleDeleteRelation = async (mappingId: number) => {
     try {
-      await api.delete(`/program-mappings/${mappingId}`);
+      await programApi.deleteProgramMapping(mappingId);
       message.success('取消映射成功');
       if (currentProgram) {
-        const response = await api.get(
-          `/program-mappings/by-parent/${currentProgram.id}`,
+        const mappings = await programApi.listProgramMappings(
+          currentProgram.id,
         );
-        setRelatedPrograms(response.data || []);
+        setRelatedPrograms(mappings);
       }
       await loadData();
     } catch (error) {
@@ -562,7 +551,7 @@ const ProgramManagement = () => {
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(`/programs/${id}`);
+      await programApi.deleteProgram(id);
       message.success('删除成功');
       loadData();
     } catch (error: any) {
@@ -582,15 +571,15 @@ const ProgramManagement = () => {
 
     try {
       if (currentProgram) {
-        await api.put(`/programs/${currentProgram.id}`, payload);
-        message.success('??????');
+        await programApi.updateProgram(currentProgram.id, payload);
+        message.success('更新成功');
         setIsEditingProperties(false);
         setPropertyDraftSnapshot(null);
         setIsEditingDescription(false);
         setDescriptionDraftSnapshot('');
       } else {
-        await api.post('/programs', payload);
-        message.success('??????');
+        await programApi.createProgram(payload);
+        message.success('创建成功');
       }
       setModalVisible(false);
       setCustomFields([]);
@@ -599,7 +588,7 @@ const ProgramManagement = () => {
       console.error('Failed to submit:', error);
       const serverMsg = error?.response?.data?.error;
       message.error(
-        serverMsg ? `??????: ${serverMsg}` : '???????????????',
+        serverMsg ? `保存失败: ${serverMsg}` : '保存失败，请稍后重试',
       );
     }
   };
@@ -619,24 +608,16 @@ const ProgramManagement = () => {
 
   const handleBatchUpload = async (file: File) => {
     setUploadLoading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const response = await api.post('/programs/batch-upload', formData, {
-        headers: { 'Content-Type': undefined },
-      });
-
-      setBatchImportPreview(response.data);
+      const preview = await programApi.uploadBatchArchive(file);
+      setBatchImportPreview(preview);
 
       // 初始化映射
-      const mappings = response.data.workstations.map(
-        (ws: WorkstationInfo) => ({
-          workstation_name: ws.name,
-          production_line_id: null,
-          vehicle_model_id: null,
-        }),
-      );
+      const mappings = preview.workstations.map((ws: WorkstationInfo) => ({
+        workstation_name: ws.name,
+        production_line_id: null,
+        vehicle_model_id: null,
+      }));
       setWorkstationMappings(mappings);
 
       setBatchImportStep(1);
@@ -679,13 +660,13 @@ const ProgramManagement = () => {
     setBatchImportStep(2);
 
     try {
-      const response = await api.post('/programs/batch-import', {
-        preview_id: batchImportPreview?.preview_id,
-        mappings: workstationMappings,
-      });
+      const response = await programApi.startBatchImport(
+        batchImportPreview?.preview_id,
+        workstationMappings,
+      );
 
       message.success('批量导入已开始');
-      startBatchImportPolling(response.data.task_id);
+      startBatchImportPolling(response.task_id);
     } catch (error: any) {
       console.error('Failed to start batch import:', error);
       if (error?.response?.status === 404 || error?.response?.status === 405) {
@@ -704,16 +685,16 @@ const ProgramManagement = () => {
 
     const interval = setInterval(async () => {
       try {
-        const response = await api.get(`/tasks/${taskId}/status`);
-        setBatchImportStatus(response.data);
+        const status = await programApi.getTaskStatus(taskId);
+        setBatchImportStatus(status);
 
         if (
-          response.data.status === 'completed' ||
-          response.data.status === 'failed'
+          status.status === 'completed' ||
+          status.status === 'failed'
         ) {
           clearInterval(interval);
           setBatchImportPolling(null);
-          if (response.data.status === 'completed') {
+          if (status.status === 'completed') {
             message.success('批量导入完成');
             loadData();
           }
@@ -776,11 +757,7 @@ const ProgramManagement = () => {
     }
 
     try {
-      const response = await api.post('/files/upload', formData, {
-        headers: {
-          'Content-Type': undefined,
-        },
-      });
+      const response = await programApi.uploadProgramFiles(formData);
 
       const { isNewVersion } = response.data;
       if (isNewVersion) {
@@ -828,7 +805,7 @@ const ProgramManagement = () => {
   };
 
   const downloadWithAuth = async (url: string, fallbackName: string) => {
-    const response = await api.get(url, { responseType: 'blob' });
+    const response = await programApi.downloadBlob(url);
     const blob = new Blob([response.data]);
 
     const contentDisposition = response.headers['content-disposition'];
@@ -855,8 +832,12 @@ const ProgramManagement = () => {
 
   const handleDownload = async (record: any) => {
     try {
-      const response = await api.get(`/files/program/${record.id}`);
-      const versions = response.data?.versions || [];
+      const versionResult = await programApi.listProgramVersions(
+        record.id,
+        1,
+        20,
+      );
+      const versions = versionResult.versions;
       if (versions.length === 0) {
         message.warning('该程序暂无上传的文件');
         return;
@@ -890,7 +871,7 @@ const ProgramManagement = () => {
 
   const handleDeleteSingleFile = async (fileId: number) => {
     try {
-      await api.delete(`/files/${fileId}`);
+      await programApi.deleteFile(fileId);
       message.success('文件删除成功');
       if (currentProgram) {
         await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
@@ -1317,9 +1298,10 @@ const ProgramManagement = () => {
         return;
       }
 
-      await api.put(`/versions/${editorSelectedVersion.id}`, {
-        change_log: versionDescriptionValue || '',
-      });
+      await programApi.updateVersionDescription(
+        editorSelectedVersion.id,
+        versionDescriptionValue || '',
+      );
 
       if (currentProgram) {
         await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
