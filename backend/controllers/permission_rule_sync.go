@@ -59,3 +59,7 @@ func permissionRuleChangeForAction(lineID uint, action string, allowed bool, uns
 		Decision:     decision,
 	}
 }
+
+func permissionMatrixItemEmpty(canView, canDownload, canUpload, canManage bool) bool {
+	return !canView && !canDownload && !canUpload && !canManage
+}

@@ -200,14 +200,6 @@ func setupVehicleModelPermissionTest(t *testing.T) (*gin.Engine, string, models.
 		t.Fatalf("create user: %v", err)
 	}
 
-	permission := models.UserPermission{
-		UserID:           user.ID,
-		ProductionLineID: lineA.ID,
-		CanView:          true,
-	}
-	if err := database.DB.Create(&permission).Error; err != nil {
-		t.Fatalf("create permission: %v", err)
-	}
 	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineA.ID, true, false, false, false)
 
 	token := createUserTokenForTest(t, user.ID, "user")
@@ -225,6 +217,56 @@ func saveProductionLineRuleForTest(t *testing.T, subject services.PermissionSubj
 	}, false))
 	if err != nil {
 		t.Fatalf("save permission rule: %v", err)
+	}
+}
+
+func assertProductionLineRulesForTest(t *testing.T, subject services.PermissionSubject, lineID uint, canView, canDownload, canUpload, canManage bool) {
+	t.Helper()
+	expected := map[string]bool{
+		models.PermissionActionView:     canView,
+		models.PermissionActionDownload: canDownload,
+		models.PermissionActionUpload:   canUpload,
+		models.PermissionActionManage:   canManage,
+	}
+	for action, allowed := range expected {
+		var rule models.PermissionRule
+		err := database.DB.Where(
+			"subject_type = ? AND subject_id = ? AND subject_key = ? AND resource_type = ? AND resource_id = ? AND action = ?",
+			subject.Type,
+			subject.ID,
+			subject.Key,
+			models.PermissionResourceProductionLine,
+			lineID,
+			action,
+		).First(&rule).Error
+		if err != nil {
+			t.Fatalf("load %s rule: %v", action, err)
+		}
+		expectedDecision := models.PermissionDecisionDeny
+		if allowed {
+			expectedDecision = models.PermissionDecisionAllow
+		}
+		if rule.Decision != expectedDecision {
+			t.Fatalf("expected %s rule %s, got %#v", action, expectedDecision, rule)
+		}
+	}
+}
+
+func assertNoProductionLineRulesForTest(t *testing.T, subject services.PermissionSubject, lineID uint) {
+	t.Helper()
+	var count int64
+	if err := database.DB.Model(&models.PermissionRule{}).Where(
+		"subject_type = ? AND subject_id = ? AND subject_key = ? AND resource_type = ? AND resource_id = ?",
+		subject.Type,
+		subject.ID,
+		subject.Key,
+		models.PermissionResourceProductionLine,
+		lineID,
+	).Count(&count).Error; err != nil {
+		t.Fatalf("count permission rules: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no permission rules for subject %#v line %d, count=%d", subject, lineID, count)
 	}
 }
 
@@ -1072,16 +1114,7 @@ func TestCreatePermissionUpsertsPerUserAndLineAndValidatesRelations(t *testing.T
 		t.Fatalf("expected duplicate create to update with status 200, got %d body=%s", updateResp.Code, updateResp.Body.String())
 	}
 
-	var permissions []models.UserPermission
-	if err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, line.ID).Find(&permissions).Error; err != nil {
-		t.Fatalf("query permissions: %v", err)
-	}
-	if len(permissions) != 1 {
-		t.Fatalf("expected one user-line permission row, got %#v", permissions)
-	}
-	if permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || !permissions[0].CanManage {
-		t.Fatalf("expected permission to be updated in-place, got %#v", permissions[0])
-	}
+	assertProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, line.ID, false, true, false, true)
 
 	falseCreateResp := performProductionLineCustomFieldRequest(t, r, http.MethodPost, "/api/permissions", token, map[string]any{
 		"user_id":            user.ID,
@@ -1094,13 +1127,7 @@ func TestCreatePermissionUpsertsPerUserAndLineAndValidatesRelations(t *testing.T
 	if falseCreateResp.Code != http.StatusCreated {
 		t.Fatalf("expected false-view create status 201, got %d body=%s", falseCreateResp.Code, falseCreateResp.Body.String())
 	}
-	var falseCreated models.UserPermission
-	if err := database.DB.Where("user_id = ? AND production_line_id = ?", user.ID, lineB.ID).First(&falseCreated).Error; err != nil {
-		t.Fatalf("query false-view permission: %v", err)
-	}
-	if falseCreated.CanView || !falseCreated.CanDownload || falseCreated.CanUpload || falseCreated.CanManage {
-		t.Fatalf("expected false-view permission to preserve explicit false values, got %#v", falseCreated)
-	}
+	assertProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineB.ID, false, true, false, false)
 }
 
 func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
@@ -1144,13 +1171,7 @@ func TestCreateDepartmentPermissionValidatesRelations(t *testing.T) {
 	if falseCreateResp.Code != http.StatusCreated {
 		t.Fatalf("expected false-view department permission create status 201, got %d body=%s", falseCreateResp.Code, falseCreateResp.Body.String())
 	}
-	var falseCreated models.DepartmentPermission
-	if err := database.DB.Where("department_id = ? AND production_line_id = ?", department.ID, lineB.ID).First(&falseCreated).Error; err != nil {
-		t.Fatalf("query false-view department permission: %v", err)
-	}
-	if falseCreated.CanView || !falseCreated.CanDownload || falseCreated.CanUpload || falseCreated.CanManage {
-		t.Fatalf("expected department permission to preserve explicit false values, got %#v", falseCreated)
-	}
+	assertProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lineB.ID, false, true, false, false)
 }
 
 func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
@@ -1170,10 +1191,7 @@ func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create matrix user: %v", err)
 	}
-	existing := models.UserPermission{UserID: user.ID, ProductionLineID: lineB.ID, CanView: true, CanManage: true}
-	if err := database.DB.Create(&existing).Error; err != nil {
-		t.Fatalf("create existing permission: %v", err)
-	}
+	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineB.ID, true, false, false, true)
 
 	getResp := performProductionLineCustomFieldRequest(t, r, http.MethodGet, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, nil)
 	if getResp.Code != http.StatusOK {
@@ -1194,19 +1212,8 @@ func TestUserPermissionMatrixIncludesAllLinesAndSavesDeletesRows(t *testing.T) {
 		t.Fatalf("expected matrix save status 200, got %d body=%s", saveResp.Code, saveResp.Body.String())
 	}
 
-	var permissions []models.UserPermission
-	if err := database.DB.Where("user_id = ?", user.ID).Order("production_line_id ASC").Find(&permissions).Error; err != nil {
-		t.Fatalf("query user permissions: %v", err)
-	}
-	if len(permissions) != 2 || permissions[0].ProductionLineID != lineA.ID || permissions[1].ProductionLineID != lineB.ID {
-		t.Fatalf("expected explicit permission rows on line A and line B, got %#v", permissions)
-	}
-	if !permissions[0].CanView || !permissions[0].CanDownload || permissions[0].CanUpload || permissions[0].CanManage {
-		t.Fatalf("unexpected saved permission bits: %#v", permissions[0])
-	}
-	if permissions[1].CanView || permissions[1].CanDownload || permissions[1].CanUpload || permissions[1].CanManage {
-		t.Fatalf("expected all-false row to remain as explicit user override, got %#v", permissions[1])
-	}
+	assertProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineA.ID, true, true, false, false)
+	assertProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lineB.ID, false, false, false, false)
 
 	invalidResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
 		"permissions": []map[string]any{
@@ -1235,14 +1242,6 @@ func TestUserPermissionMatrixAllFalseOverridesInheritedPermission(t *testing.T) 
 	}
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
-	}
-	if err := database.DB.Create(&models.DepartmentPermission{
-		DepartmentID:     department.ID,
-		ProductionLineID: line.ID,
-		CanView:          true,
-		CanDownload:      true,
-	}).Error; err != nil {
-		t.Fatalf("create inherited department permission: %v", err)
 	}
 	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, line.ID, true, true, false, false)
 
@@ -1285,25 +1284,7 @@ func TestUserPermissionMatrixCanClearOverrideBackToInheritance(t *testing.T) {
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if err := database.DB.Create(&models.DepartmentPermission{
-		DepartmentID:     department.ID,
-		ProductionLineID: line.ID,
-		CanView:          true,
-		CanDownload:      true,
-	}).Error; err != nil {
-		t.Fatalf("create inherited department permission: %v", err)
-	}
 	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, line.ID, true, true, false, false)
-	if err := database.DB.Create(&models.UserPermission{
-		UserID:           user.ID,
-		ProductionLineID: line.ID,
-		CanView:          false,
-		CanDownload:      false,
-		CanUpload:        false,
-		CanManage:        false,
-	}).Error; err != nil {
-		t.Fatalf("create user override: %v", err)
-	}
 	saveProductionLineRuleForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, line.ID, false, false, false, false)
 
 	saveResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, fmt.Sprintf("/api/permissions/user/%d/matrix", user.ID), token, map[string]any{
@@ -1315,13 +1296,7 @@ func TestUserPermissionMatrixCanClearOverrideBackToInheritance(t *testing.T) {
 		t.Fatalf("expected matrix save status 200, got %d body=%s", saveResp.Code, saveResp.Body.String())
 	}
 
-	var count int64
-	if err := database.DB.Model(&models.UserPermission{}).Where("user_id = ? AND production_line_id = ?", user.ID, line.ID).Count(&count).Error; err != nil {
-		t.Fatalf("count user override: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("expected user override to be cleared, count=%d", count)
-	}
+	assertNoProductionLineRulesForTest(t, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, line.ID)
 
 	resolved, err := resolveUserLinePermission(user, line.ID)
 	if err != nil {
@@ -1341,54 +1316,39 @@ func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		path      string
-		model     any
-		where     string
-		whereArgs []any
-		seed      func()
+		name         string
+		path         string
+		subject      services.PermissionSubject
+		emptyClears  bool
+		clearPayload map[string]any
 	}{
 		{
-			name:      "department matrix",
-			path:      fmt.Sprintf("/api/department-permissions/department/%d/matrix", department.ID),
-			model:     &models.DepartmentPermission{},
-			where:     "department_id = ? AND production_line_id = ?",
-			whereArgs: []any{department.ID, line.ID},
-			seed: func() {
-				if err := database.DB.Create(&models.DepartmentPermission{DepartmentID: department.ID, ProductionLineID: line.ID, CanView: true}).Error; err != nil {
-					t.Fatalf("seed department permission: %v", err)
-				}
+			name:        "department matrix",
+			path:        fmt.Sprintf("/api/department-permissions/department/%d/matrix", department.ID),
+			subject:     services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID},
+			emptyClears: false,
+			clearPayload: map[string]any{
+				"production_line_id": line.ID,
+				"inherit":            true,
 			},
 		},
 		{
-			name:      "role default matrix",
-			path:      "/api/permission-defaults/roles/user/matrix",
-			model:     &models.RoleDefaultPermission{},
-			where:     "role = ? AND production_line_id = ?",
-			whereArgs: []any{"user", line.ID},
-			seed: func() {
-				if err := database.DB.Create(&models.RoleDefaultPermission{Role: "user", ProductionLineID: line.ID, CanView: true}).Error; err != nil {
-					t.Fatalf("seed role default: %v", err)
-				}
-			},
+			name:        "role default matrix",
+			path:        "/api/permission-defaults/roles/user/matrix",
+			subject:     services.PermissionSubject{Type: models.PermissionSubjectRole, Key: "user"},
+			emptyClears: true,
 		},
 		{
-			name:      "department default matrix",
-			path:      fmt.Sprintf("/api/permission-defaults/departments/%d/matrix", department.ID),
-			model:     &models.DepartmentDefaultPermission{},
-			where:     "department_id = ? AND production_line_id = ?",
-			whereArgs: []any{department.ID, line.ID},
-			seed: func() {
-				if err := database.DB.Create(&models.DepartmentDefaultPermission{DepartmentID: department.ID, ProductionLineID: line.ID, CanView: true}).Error; err != nil {
-					t.Fatalf("seed department default: %v", err)
-				}
-			},
+			name:        "department default matrix",
+			path:        fmt.Sprintf("/api/permission-defaults/departments/%d/matrix", department.ID),
+			subject:     services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: department.ID},
+			emptyClears: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.seed()
+			saveProductionLineRuleForTest(t, tt.subject, line.ID, true, false, false, false)
 			deleteResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
 				"permissions": []map[string]any{
 					{"production_line_id": line.ID, "can_view": false, "can_download": false, "can_upload": false, "can_manage": false},
@@ -1397,16 +1357,10 @@ func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 			if deleteResp.Code != http.StatusOK {
 				t.Fatalf("expected delete save status 200, got %d body=%s", deleteResp.Code, deleteResp.Body.String())
 			}
-			var count int64
-			if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
-				t.Fatalf("count deleted rows: %v", err)
-			}
-			if tt.name == "department matrix" {
-				if count != 1 {
-					t.Fatalf("expected department all-false save to keep explicit override row, count=%d", count)
-				}
-			} else if count != 0 {
-				t.Fatalf("expected default all-false save to delete row, count=%d", count)
+			if tt.emptyClears {
+				assertNoProductionLineRulesForTest(t, tt.subject, line.ID)
+			} else {
+				assertProductionLineRulesForTest(t, tt.subject, line.ID, false, false, false, false)
 			}
 
 			upsertResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
@@ -1417,28 +1371,16 @@ func TestPermissionDefaultAndDepartmentMatricesSaveAndDeleteRows(t *testing.T) {
 			if upsertResp.Code != http.StatusOK {
 				t.Fatalf("expected upsert save status 200, got %d body=%s", upsertResp.Code, upsertResp.Body.String())
 			}
-			if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
-				t.Fatalf("count upserted rows: %v", err)
-			}
-			if count != 1 {
-				t.Fatalf("expected one upserted row, count=%d", count)
-			}
+			assertProductionLineRulesForTest(t, tt.subject, line.ID, true, false, true, false)
 
-			if tt.name == "department matrix" {
+			if tt.clearPayload != nil {
 				clearResp := performProductionLineCustomFieldRequest(t, r, http.MethodPut, tt.path, token, map[string]any{
-					"permissions": []map[string]any{
-						{"production_line_id": line.ID, "inherit": true},
-					},
+					"permissions": []map[string]any{tt.clearPayload},
 				})
 				if clearResp.Code != http.StatusOK {
 					t.Fatalf("expected clear override status 200, got %d body=%s", clearResp.Code, clearResp.Body.String())
 				}
-				if err := database.DB.Model(tt.model).Where(tt.where, tt.whereArgs...).Count(&count).Error; err != nil {
-					t.Fatalf("count cleared rows: %v", err)
-				}
-				if count != 0 {
-					t.Fatalf("expected department override to be cleared, count=%d", count)
-				}
+				assertNoProductionLineRulesForTest(t, tt.subject, line.ID)
 			}
 		})
 	}

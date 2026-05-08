@@ -4,7 +4,6 @@ import (
 	"crane-system/database"
 	"crane-system/models"
 	"crane-system/services"
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -158,13 +157,54 @@ func GetLinePermissionsByLine(c *gin.Context) {
 		return
 	}
 
-	var userPerms []models.UserPermission
-	database.DB.Preload("User").Preload("User.Department").
-		Where("production_line_id = ?", lineID).Find(&userPerms)
+	var users []models.User
+	if err := database.DB.Preload("Department").Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "鏌ヨ澶辫触"})
+		return
+	}
+	var lines []models.ProductionLine
+	if err := database.DB.Where("id = ?", lineID).Find(&lines).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "鏌ヨ澶辫触"})
+		return
+	}
+	userPerms := make([]models.UserPermission, 0)
+	if len(lines) > 0 {
+		for _, user := range users {
+			bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lines)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "鏌ヨ澶辫触"})
+				return
+			}
+			for _, bit := range bits {
+				userPerms = append(userPerms, userPermissionFromBits(user, bit, lines))
+			}
+		}
+	}
 
-	var rolePerms []models.RoleLinePermission
-	database.DB.Preload("ProductionLine").
-		Where("production_line_id = ?", lineID).Find(&rolePerms)
+	rolePerms := make([]models.RoleLinePermission, 0)
+	var roles []models.Role
+	if err := database.DB.Find(&roles).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "鏌ヨ澶辫触"})
+		return
+	}
+	for _, role := range roles {
+		bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: role.ID, Key: role.Name}, lines)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "鏌ヨ澶辫触"})
+			return
+		}
+		for _, bit := range bits {
+			rolePerms = append(rolePerms, models.RoleLinePermission{
+				ID:               syntheticLinePermissionID(role.ID, bit.ProductionLineID),
+				RoleID:           role.ID,
+				ProductionLineID: bit.ProductionLineID,
+				CanView:          bit.CanView,
+				CanDownload:      bit.CanDownload,
+				CanUpload:        bit.CanUpload,
+				CanManage:        bit.CanManage,
+			})
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"production_line_id": lineID,
@@ -220,31 +260,6 @@ func SaveLinePermissionByAdmin(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		var existing models.UserPermission
-		err := tx.Where("user_id = ? AND production_line_id = ?", req.UserID, lineID).
-			First(&existing).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if err := tx.Create(&models.UserPermission{
-				UserID:           req.UserID,
-				ProductionLineID: uint(lineID),
-				CanView:          req.CanView,
-				CanDownload:      req.CanDownload,
-				CanUpload:        req.CanUpload,
-				CanManage:        canManage,
-			}).Error; err != nil {
-				return err
-			}
-		} else if err := tx.Model(&existing).Updates(map[string]interface{}{
-			"can_view":     req.CanView,
-			"can_download": req.CanDownload,
-			"can_upload":   req.CanUpload,
-			"can_manage":   canManage,
-		}).Error; err != nil {
-			return err
-		}
 		return syncLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectUser, ID: req.UserID}, bits)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限保存失败"})

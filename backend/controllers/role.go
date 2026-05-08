@@ -267,16 +267,17 @@ type RoleLinePermItem struct {
 }
 
 // SaveRoleLinePermissions 保存角色的产线权限矩阵（增量更新）。
+
 func SaveRoleLinePermissions(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的角色ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role id"})
 		return
 	}
 
 	var role models.Role
 	if err := database.DB.First(&role, roleID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "role not found"})
 		return
 	}
 
@@ -286,82 +287,61 @@ func SaveRoleLinePermissions(c *gin.Context) {
 		return
 	}
 
+	changes := make([]services.PermissionRuleChange, 0, len(req.Permissions)*4)
 	for _, item := range req.Permissions {
-		allFalse := !item.CanView && !item.CanDownload && !item.CanUpload && !item.CanManage
-		if allFalse {
-			// 全部为 false 时删除记录
-			database.DB.Where("role_id = ? AND production_line_id = ?", roleID, item.ProductionLineID).
-				Delete(&models.RoleLinePermission{})
-			if err := clearLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: uint(roleID), Key: role.Name}, item.ProductionLineID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
-				return
-			}
-		} else {
-			// upsert
-			var existing models.RoleLinePermission
-			err := database.DB.Where("role_id = ? AND production_line_id = ?", roleID, item.ProductionLineID).
-				First(&existing).Error
-			if err != nil {
-				database.DB.Create(&models.RoleLinePermission{
-					RoleID:           uint(roleID),
-					ProductionLineID: item.ProductionLineID,
-					CanView:          item.CanView,
-					CanDownload:      item.CanDownload,
-					CanUpload:        item.CanUpload,
-					CanManage:        item.CanManage,
-				})
-			} else {
-				database.DB.Model(&existing).Updates(map[string]interface{}{
-					"can_view":     item.CanView,
-					"can_download": item.CanDownload,
-					"can_upload":   item.CanUpload,
-					"can_manage":   item.CanManage,
-				})
-			}
-			if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: uint(roleID), Key: role.Name}, linePermissionBits{
-				ProductionLineID: item.ProductionLineID,
-				CanView:          item.CanView,
-				CanDownload:      item.CanDownload,
-				CanUpload:        item.CanUpload,
-				CanManage:        item.CanManage,
-			}); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
-				return
-			}
+		if err := validatePermissionMatrixLines([]savePermissionMatrixItem{{ProductionLineID: item.ProductionLineID}}); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
+		changes = append(changes, permissionRuleChangesForLineBits(linePermissionBits{
+			ProductionLineID: item.ProductionLineID,
+			CanView:          item.CanView,
+			CanDownload:      item.CanDownload,
+			CanUpload:        item.CanUpload,
+			CanManage:        item.CanManage,
+		}, permissionMatrixItemEmpty(item.CanView, item.CanDownload, item.CanUpload, item.CanManage))...)
+	}
+
+	if err := services.SavePermissionRuleChanges(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: uint(roleID), Key: role.Name}, changes); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "save line permissions failed"})
+		return
 	}
 
 	services.InvalidateAllCache()
-	c.JSON(http.StatusOK, gin.H{"message": "产线权限保存成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "line permissions saved"})
 }
 
 // GetRoleLinePermissions 获取角色的产线权限矩阵。
+
 func GetRoleLinePermissions(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的角色ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role id"})
 		return
 	}
 
 	var role models.Role
 	if err := database.DB.First(&role, roleID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "角色不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "role not found"})
 		return
 	}
 
-	// 获取所有产线
 	var lines []models.ProductionLine
-	database.DB.Where("status = ?", "active").Order("id ASC").Find(&lines)
+	if err := database.DB.Where("status = ?", "active").Order("id ASC").Find(&lines).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
 
-	// 获取角色产线权限
-	var rolePerms []models.RoleLinePermission
-	database.DB.Where("role_id = ?", roleID).Find(&rolePerms)
-	rolePermMap := map[uint]models.RoleLinePermission{}
-	for _, rp := range rolePerms {
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: uint(roleID), Key: role.Name}, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+		return
+	}
+	rolePermMap := map[uint]services.LinePermissionBits{}
+	for _, rp := range bits {
 		rolePermMap[rp.ProductionLineID] = rp
 	}
 
-	// 构建矩阵
 	type MatrixRow struct {
 		ProductionLineID   uint   `json:"production_line_id"`
 		ProductionLineName string `json:"production_line_name"`

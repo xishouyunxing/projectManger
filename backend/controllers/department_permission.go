@@ -12,21 +12,35 @@ import (
 )
 
 func GetDepartmentPermissions(c *gin.Context) {
-	var permissions []models.DepartmentPermission
-	query := database.DB.Preload("Department").Preload("ProductionLine")
-
-	if deptID := c.Query("department_id"); deptID != "" {
-		query = query.Where("department_id = ?", deptID)
+	var departments []models.Department
+	query := database.DB
+	if departmentID, err := parseOptionalUintQuery(c.Query("department_id")); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department"})
+		return
+	} else if departmentID != 0 {
+		query = query.Where("id = ?", departmentID)
 	}
-	if lineID := c.Query("production_line_id"); lineID != "" {
-		query = query.Where("production_line_id = ?", lineID)
-	}
-
-	if err := query.Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	if err := query.Find(&departments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
+	lines, ok := loadFilteredPermissionLines(c.Query("production_line_id"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid production line"})
+		return
+	}
+	permissions := make([]models.DepartmentPermission, 0)
+	for _, department := range departments {
+		bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lines)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
+			return
+		}
+		for _, bit := range bits {
+			permissions = append(permissions, departmentPermissionFromBits(department, bit, lines))
+		}
+	}
 	c.JSON(http.StatusOK, permissions)
 }
 
@@ -42,40 +56,15 @@ func CreateDepartmentPermission(c *gin.Context) {
 		return
 	}
 
-	var existing models.DepartmentPermission
-	err := database.DB.Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&existing).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	status := http.StatusCreated
+	if _, exists, err := services.LoadSubjectLinePermissionBitsByLine(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, permission.ProductionLineID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
-	}
-
-	status := http.StatusCreated
-	if err == nil {
+	} else if exists {
 		status = http.StatusOK
-		permission.ID = existing.ID
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if status == http.StatusOK {
-			existing.CanView = permission.CanView
-			existing.CanDownload = permission.CanDownload
-			existing.CanUpload = permission.CanUpload
-			existing.CanManage = permission.CanManage
-			if err := tx.Save(&existing).Error; err != nil {
-				return err
-			}
-			permission = existing
-		} else if err := tx.Model(&models.DepartmentPermission{}).Create(map[string]any{
-			"department_id":      permission.DepartmentID,
-			"production_line_id": permission.ProductionLineID,
-			"can_view":           permission.CanView,
-			"can_download":       permission.CanDownload,
-			"can_upload":         permission.CanUpload,
-			"can_manage":         permission.CanManage,
-		}).Error; err != nil {
-			return err
-		}
-
 		return syncLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
 			ProductionLineID: permission.ProductionLineID,
 			CanView:          permission.CanView,
@@ -85,19 +74,20 @@ func CreateDepartmentPermission(c *gin.Context) {
 		})
 	}); err != nil {
 		if status == http.StatusOK {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新权限失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "update permission failed"})
 		} else {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建权限失败"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "create permission failed"})
 		}
 		return
 	}
 	services.InvalidateAllCache()
 
-	if err := database.DB.Preload("Department").Preload("ProductionLine").Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&permission).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	response, ok, err := loadRuleBackedDepartmentPermission(permission.DepartmentID, permission.ProductionLineID)
+	if err != nil || !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	c.JSON(status, permission)
+	c.JSON(status, response)
 }
 
 func validateDepartmentPermissionRelations(departmentID, productionLineID uint) error {
@@ -137,13 +127,13 @@ type updateDepartmentPermissionRequest struct {
 func UpdateDepartmentPermission(c *gin.Context) {
 	permissionID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "权限ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid permission id"})
 		return
 	}
 
 	var permission models.DepartmentPermission
-	if err := database.DB.First(&permission, permissionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
+	if err := loadLegacyDepartmentPermissionByID(permissionID, &permission); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "permission not found"})
 		return
 	}
 
@@ -168,17 +158,12 @@ func UpdateDepartmentPermission(c *gin.Context) {
 	}
 
 	if len(updates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "未提供可更新字段"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no updatable fields"})
 		return
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&permission).Updates(updates).Error; err != nil {
-			return err
-		}
-		if err := tx.First(&permission, permissionID).Error; err != nil {
-			return err
-		}
+		applyDepartmentPermissionUpdates(&permission, updates)
 		return syncLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
 			ProductionLineID: permission.ProductionLineID,
 			CanView:          permission.CanView,
@@ -187,53 +172,41 @@ func UpdateDepartmentPermission(c *gin.Context) {
 			CanManage:        permission.CanManage,
 		})
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
 		return
 	}
 	services.InvalidateAllCache()
-	if err := database.DB.Preload("Department").Preload("ProductionLine").First(&permission, permissionID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+
+	response, ok, err := loadRuleBackedDepartmentPermission(permission.DepartmentID, permission.ProductionLineID)
+	if err != nil || !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-
-	c.JSON(http.StatusOK, permission)
+	c.JSON(http.StatusOK, response)
 }
 
 func DeleteDepartmentPermission(c *gin.Context) {
 	permissionID, err := parseUintParam(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "权限ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid permission id"})
 		return
 	}
 
 	var permission models.DepartmentPermission
-	if err := database.DB.First(&permission, permissionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
+	if err := loadLegacyDepartmentPermissionByID(permissionID, &permission); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "permission not found"})
 		return
 	}
 
-	rowsAffected := int64(0)
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		result := tx.Unscoped().Delete(&models.DepartmentPermission{}, permissionID)
-		if result.Error != nil {
-			return result.Error
-		}
-		rowsAffected = result.RowsAffected
-		if rowsAffected == 0 {
-			return nil
-		}
 		return clearLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, permission.ProductionLineID)
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
-		return
-	}
-	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
 		return
 	}
 	services.InvalidateAllCache()
 
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "delete succeeded"})
 }
 
 func GetUserEffectivePermissions(c *gin.Context) {
@@ -299,4 +272,90 @@ func GetUserEffectivePermissions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, effectivePermissions)
+}
+
+func departmentPermissionFromBits(department models.Department, bits services.LinePermissionBits, lines []models.ProductionLine) models.DepartmentPermission {
+	permission := models.DepartmentPermission{
+		ID:               syntheticLinePermissionID(department.ID, bits.ProductionLineID),
+		DepartmentID:     department.ID,
+		ProductionLineID: bits.ProductionLineID,
+		CanView:          bits.CanView,
+		CanDownload:      bits.CanDownload,
+		CanUpload:        bits.CanUpload,
+		CanManage:        bits.CanManage,
+		Department:       department,
+	}
+	for _, line := range lines {
+		if line.ID == bits.ProductionLineID {
+			permission.ProductionLine = line
+			break
+		}
+	}
+	return permission
+}
+
+func loadRuleBackedDepartmentPermission(departmentID, lineID uint) (models.DepartmentPermission, bool, error) {
+	var department models.Department
+	if err := database.DB.First(&department, departmentID).Error; err != nil {
+		return models.DepartmentPermission{}, false, err
+	}
+	var lines []models.ProductionLine
+	if err := database.DB.Preload("Process").Where("id = ?", lineID).Find(&lines).Error; err != nil {
+		return models.DepartmentPermission{}, false, err
+	}
+	if len(lines) == 0 {
+		return models.DepartmentPermission{}, false, nil
+	}
+	bits, exists, err := services.LoadSubjectLinePermissionBitsByLine(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID}, lineID)
+	if err != nil || !exists {
+		return models.DepartmentPermission{}, false, err
+	}
+	return departmentPermissionFromBits(department, bits, lines), true, nil
+}
+
+func loadLegacyDepartmentPermissionByID(permissionID uint, permission *models.DepartmentPermission) error {
+	var departments []models.Department
+	if err := database.DB.Find(&departments).Error; err != nil {
+		return err
+	}
+	lines, err := loadPermissionMatrixLines()
+	if err != nil {
+		return err
+	}
+	for _, department := range departments {
+		bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lines)
+		if err != nil {
+			return err
+		}
+		for _, bit := range bits {
+			if syntheticLinePermissionID(department.ID, bit.ProductionLineID) == permissionID {
+				*permission = models.DepartmentPermission{
+					ID:               permissionID,
+					DepartmentID:     department.ID,
+					ProductionLineID: bit.ProductionLineID,
+					CanView:          bit.CanView,
+					CanDownload:      bit.CanDownload,
+					CanUpload:        bit.CanUpload,
+					CanManage:        bit.CanManage,
+				}
+				return nil
+			}
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
+func applyDepartmentPermissionUpdates(permission *models.DepartmentPermission, updates map[string]interface{}) {
+	if v, ok := updates["can_view"].(bool); ok {
+		permission.CanView = v
+	}
+	if v, ok := updates["can_download"].(bool); ok {
+		permission.CanDownload = v
+	}
+	if v, ok := updates["can_upload"].(bool); ok {
+		permission.CanUpload = v
+	}
+	if v, ok := updates["can_manage"].(bool); ok {
+		permission.CanManage = v
+	}
 }

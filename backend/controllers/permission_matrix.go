@@ -51,7 +51,7 @@ type savePermissionMatrixItem struct {
 func GetUserPermissionMatrix(c *gin.Context) {
 	userID, err := parseUintParam(c.Param("user_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}
 
@@ -63,17 +63,17 @@ func GetUserPermissionMatrix(c *gin.Context) {
 
 	lines, err := loadPermissionMatrixLines()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
-	var permissions []models.UserPermission
-	if err := database.DB.Where("user_id = ?", userID).Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID}, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	permissionMap := map[uint]models.UserPermission{}
-	for _, permission := range permissions {
+	permissionMap := map[uint]services.LinePermissionBits{}
+	for _, permission := range bits {
 		permissionMap[permission.ProductionLineID] = permission
 	}
 
@@ -96,10 +96,11 @@ func GetUserPermissionMatrix(c *gin.Context) {
 // 1. 不提交该产线：保持现状；
 // 2. inherit=true：删除用户显式覆盖，重新回落到部门、角色默认或部门默认；
 // 3. inherit=false：写入用户显式覆盖，即使四个权限位全 false 也代表明确拒绝。
+
 func SaveUserPermissionMatrix(c *gin.Context) {
 	userID, err := parseUintParam(c.Param("user_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}
 	if err := validateUserExists(userID); err != nil {
@@ -118,39 +119,24 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, item := range req.Permissions {
-			// inherit 是“清除覆盖”的操作，不是把权限位保存为 false。
-			// 删除显式记录后，最终授权结果会由下级继承链重新计算。
-			if item.Inherit {
-				if err := tx.Unscoped().Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).Delete(&models.UserPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			// 非 inherit 的请求始终保存为显式覆盖。
-			// permissionMatrixItemEmpty 在用户矩阵中不能用于删除，否则会破坏“显式拒绝”。
-			if err := upsertUserPermissionOverride(tx, userID, item); err != nil {
-				return err
-			}
-		}
 		return services.SavePermissionRuleChangesTx(
 			tx,
 			services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID},
 			permissionRuleChangesFromMatrixItems(req.Permissions, false),
 		)
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
 		return
 	}
 	services.InvalidateAllCache()
 
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "save succeeded"})
 }
 
 func GetDepartmentPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "部门ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department id"})
 		return
 	}
 	if err := validateDepartmentExists(departmentID); err != nil {
@@ -160,17 +146,17 @@ func GetDepartmentPermissionMatrix(c *gin.Context) {
 
 	lines, err := loadPermissionMatrixLines()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
-	var permissions []models.DepartmentPermission
-	if err := database.DB.Where("department_id = ?", departmentID).Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID}, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	permissionMap := map[uint]models.DepartmentPermission{}
-	for _, permission := range permissions {
+	permissionMap := map[uint]services.LinePermissionBits{}
+	for _, permission := range bits {
 		permissionMap[permission.ProductionLineID] = permission
 	}
 
@@ -190,10 +176,11 @@ func GetDepartmentPermissionMatrix(c *gin.Context) {
 //
 // 部门显式权限会影响部门内所有未被用户显式覆盖的账号，因此同样需要保留全 false 的显式拒绝。
 // 只有 inherit=true 才允许删除部门覆盖，普通全 false 保存必须落库。
+
 func SaveDepartmentPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "部门ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department id"})
 		return
 	}
 	if err := validateDepartmentExists(departmentID); err != nil {
@@ -212,31 +199,18 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, item := range req.Permissions {
-			// 清除部门覆盖后，最终授权会继续回落到角色默认或部门默认权限。
-			if item.Inherit {
-				if err := tx.Unscoped().Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).Delete(&models.DepartmentPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			// 全 false 仍然是部门级显式拒绝，不能复用默认权限矩阵的“空权限删除”逻辑。
-			if err := upsertDepartmentPermissionOverride(tx, departmentID, item); err != nil {
-				return err
-			}
-		}
 		return services.SavePermissionRuleChangesTx(
 			tx,
 			services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID},
 			permissionRuleChangesFromMatrixItems(req.Permissions, false),
 		)
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
 		return
 	}
 	services.InvalidateAllCache()
 
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "save succeeded"})
 }
 
 func GetRoleDefaultPermissionMatrix(c *gin.Context) {
@@ -248,17 +222,17 @@ func GetRoleDefaultPermissionMatrix(c *gin.Context) {
 
 	lines, err := loadPermissionMatrixLines()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
-	var permissions []models.RoleDefaultPermission
-	if err := database.DB.Where("role = ?", role).Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectRole, Key: role}, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	permissionMap := map[uint]models.RoleDefaultPermission{}
-	for _, permission := range permissions {
+	permissionMap := map[uint]services.LinePermissionBits{}
+	for _, permission := range bits {
 		permissionMap[permission.ProductionLineID] = permission
 	}
 
@@ -292,47 +266,24 @@ func SaveRoleDefaultPermissionMatrix(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, item := range req.Permissions {
-			if permissionMatrixItemEmpty(item) {
-				if err := tx.Unscoped().Where("role = ? AND production_line_id = ?", role, item.ProductionLineID).Delete(&models.RoleDefaultPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-
-			var permission models.RoleDefaultPermission
-			err := tx.Where("role = ? AND production_line_id = ?", role, item.ProductionLineID).First(&permission).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			permission.Role = role
-			permission.ProductionLineID = item.ProductionLineID
-			permission.CanView = item.CanView
-			permission.CanDownload = item.CanDownload
-			permission.CanUpload = item.CanUpload
-			permission.CanManage = item.CanManage
-			if err := tx.Save(&permission).Error; err != nil {
-				return err
-			}
-		}
 		return services.SavePermissionRuleChangesTx(
 			tx,
 			services.PermissionSubject{Type: models.PermissionSubjectRole, Key: role},
 			permissionRuleChangesFromMatrixItems(req.Permissions, true),
 		)
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
 		return
 	}
 	services.InvalidateAllCache()
 
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "save succeeded"})
 }
 
 func GetDepartmentDefaultPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "部门ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department id"})
 		return
 	}
 	if err := validateDepartmentExists(departmentID); err != nil {
@@ -342,17 +293,17 @@ func GetDepartmentDefaultPermissionMatrix(c *gin.Context) {
 
 	lines, err := loadPermissionMatrixLines()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
 
-	var permissions []models.DepartmentDefaultPermission
-	if err := database.DB.Where("department_id = ?", departmentID).Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: departmentID}, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
-	permissionMap := map[uint]models.DepartmentDefaultPermission{}
-	for _, permission := range permissions {
+	permissionMap := map[uint]services.LinePermissionBits{}
+	for _, permission := range bits {
 		permissionMap[permission.ProductionLineID] = permission
 	}
 
@@ -371,7 +322,7 @@ func GetDepartmentDefaultPermissionMatrix(c *gin.Context) {
 func SaveDepartmentDefaultPermissionMatrix(c *gin.Context) {
 	departmentID, err := parseUintParam(c.Param("department_id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "部门ID格式错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid department id"})
 		return
 	}
 	if err := validateDepartmentExists(departmentID); err != nil {
@@ -390,41 +341,18 @@ func SaveDepartmentDefaultPermissionMatrix(c *gin.Context) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, item := range req.Permissions {
-			if permissionMatrixItemEmpty(item) {
-				if err := tx.Unscoped().Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).Delete(&models.DepartmentDefaultPermission{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-
-			var permission models.DepartmentDefaultPermission
-			err := tx.Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).First(&permission).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			permission.DepartmentID = departmentID
-			permission.ProductionLineID = item.ProductionLineID
-			permission.CanView = item.CanView
-			permission.CanDownload = item.CanDownload
-			permission.CanUpload = item.CanUpload
-			permission.CanManage = item.CanManage
-			if err := tx.Save(&permission).Error; err != nil {
-				return err
-			}
-		}
 		return services.SavePermissionRuleChangesTx(
 			tx,
 			services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: departmentID},
 			permissionRuleChangesFromMatrixItems(req.Permissions, true),
 		)
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed"})
 		return
 	}
 	services.InvalidateAllCache()
 
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	c.JSON(http.StatusOK, gin.H{"message": "save succeeded"})
 }
 
 func loadPermissionMatrixLines() ([]models.ProductionLine, error) {
@@ -525,14 +453,10 @@ func validatePermissionMatrixLines(items []savePermissionMatrixItem) error {
 	return nil
 }
 
-func permissionMatrixItemEmpty(item savePermissionMatrixItem) bool {
-	return !item.CanView && !item.CanDownload && !item.CanUpload && !item.CanManage
-}
-
 func permissionRuleChangesFromMatrixItems(items []savePermissionMatrixItem, emptyMeansUnset bool) []services.PermissionRuleChange {
 	changes := make([]services.PermissionRuleChange, 0, len(items)*4)
 	for _, item := range items {
-		unset := item.Inherit || (emptyMeansUnset && permissionMatrixItemEmpty(item))
+		unset := item.Inherit || (emptyMeansUnset && permissionMatrixItemEmpty(item.CanView, item.CanDownload, item.CanUpload, item.CanManage))
 		changes = append(changes,
 			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionView, item.CanView, unset),
 			permissionRuleChangeForAction(item.ProductionLineID, models.PermissionActionDownload, item.CanDownload, unset),
@@ -541,58 +465,4 @@ func permissionRuleChangesFromMatrixItems(items []savePermissionMatrixItem, empt
 		)
 	}
 	return changes
-}
-
-// permissionMatrixUpdates 只生成四个权限位的更新内容。
-// 是否删除覆盖由调用方通过 Inherit 决定，不能在这里根据全 false 自动删除。
-func permissionMatrixUpdates(item savePermissionMatrixItem) map[string]any {
-	return map[string]any{
-		"can_view":     item.CanView,
-		"can_download": item.CanDownload,
-		"can_upload":   item.CanUpload,
-		"can_manage":   item.CanManage,
-	}
-}
-
-// upsertUserPermissionOverride 保存用户层显式覆盖。
-// 这里先 Count 再 Updates/Create，是为了兼容当前模型的软删除和唯一约束迁移状态；
-// 即使 item 四个权限位全 false，也必须写入或更新记录来表达显式拒绝。
-func upsertUserPermissionOverride(tx *gorm.DB, userID uint, item savePermissionMatrixItem) error {
-	updates := permissionMatrixUpdates(item)
-	var count int64
-	if err := tx.Model(&models.UserPermission{}).
-		Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).
-		Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return tx.Model(&models.UserPermission{}).
-			Where("user_id = ? AND production_line_id = ?", userID, item.ProductionLineID).
-			Updates(updates).Error
-	}
-
-	updates["user_id"] = userID
-	updates["production_line_id"] = item.ProductionLineID
-	return tx.Model(&models.UserPermission{}).Create(updates).Error
-}
-
-// upsertDepartmentPermissionOverride 保存部门层显式覆盖，语义与用户覆盖一致。
-// 默认权限矩阵可以把空权限视为删除，但部门覆盖不能这样做，否则无法阻断继承权限。
-func upsertDepartmentPermissionOverride(tx *gorm.DB, departmentID uint, item savePermissionMatrixItem) error {
-	updates := permissionMatrixUpdates(item)
-	var count int64
-	if err := tx.Model(&models.DepartmentPermission{}).
-		Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).
-		Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return tx.Model(&models.DepartmentPermission{}).
-			Where("department_id = ? AND production_line_id = ?", departmentID, item.ProductionLineID).
-			Updates(updates).Error
-	}
-
-	updates["department_id"] = departmentID
-	updates["production_line_id"] = item.ProductionLineID
-	return tx.Model(&models.DepartmentPermission{}).Create(updates).Error
 }

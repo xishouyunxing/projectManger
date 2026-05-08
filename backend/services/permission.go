@@ -60,6 +60,15 @@ type PermissionRuleChange struct {
 	Decision     string `json:"decision"`
 }
 
+type LinePermissionBits struct {
+	ProductionLineID uint
+	CanView          bool
+	CanDownload      bool
+	CanUpload        bool
+	CanManage        bool
+	Source           string
+}
+
 type PermissionSubject struct {
 	Type string
 	ID   uint
@@ -369,6 +378,65 @@ func ResolveSubjectRuleMatrix(subject PermissionSubject, productionLines []model
 		matrix = append(matrix, PermissionMatrixLine{ResourceType: models.PermissionResourceProductionLine, ResourceID: line.ID, ResourceName: lineNames[line.ID], Actions: cells})
 	}
 	return matrix, nil
+}
+
+func LoadSubjectLinePermissionBits(subject PermissionSubject, productionLines []models.ProductionLine) ([]LinePermissionBits, error) {
+	subject = normalizeSubject(subject)
+	lineIDs := make([]uint, 0, len(productionLines))
+	for _, line := range productionLines {
+		lineIDs = append(lineIDs, line.ID)
+	}
+	if len(lineIDs) == 0 {
+		return []LinePermissionBits{}, nil
+	}
+	rules, err := loadRuleMap(database.DB, subject.Type, subject.ID, subject.Key, lineIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]LinePermissionBits, 0, len(productionLines))
+	for _, line := range productionLines {
+		bits := LinePermissionBits{ProductionLineID: line.ID, Source: "none"}
+		for _, action := range permissionActions {
+			decision, ok := rules[ruleKey(line.ID, action)]
+			if !ok {
+				continue
+			}
+			bits.Source = decision.Source
+			allowed := decision.Decision == models.PermissionDecisionAllow
+			switch action {
+			case models.PermissionActionView:
+				bits.CanView = allowed
+			case models.PermissionActionDownload:
+				bits.CanDownload = allowed
+			case models.PermissionActionUpload:
+				bits.CanUpload = allowed
+			case models.PermissionActionManage:
+				bits.CanManage = allowed
+			}
+		}
+		if bits.Source != "none" {
+			result = append(result, bits)
+		}
+	}
+	return result, nil
+}
+
+func LoadSubjectLinePermissionBitsByLine(subject PermissionSubject, productionLineID uint) (LinePermissionBits, bool, error) {
+	var lines []models.ProductionLine
+	if err := database.DB.Select("id").Where("id = ?", productionLineID).Find(&lines).Error; err != nil {
+		return LinePermissionBits{}, false, err
+	}
+	if len(lines) == 0 {
+		return LinePermissionBits{}, false, nil
+	}
+	bits, err := LoadSubjectLinePermissionBits(subject, lines)
+	if err != nil {
+		return LinePermissionBits{}, false, err
+	}
+	if len(bits) == 0 {
+		return LinePermissionBits{ProductionLineID: productionLineID, Source: "none"}, false, nil
+	}
+	return bits[0], true, nil
 }
 
 func normalizeSubject(subject PermissionSubject) PermissionSubject {

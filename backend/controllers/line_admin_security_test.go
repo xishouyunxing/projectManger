@@ -246,12 +246,12 @@ func TestAdminCanGrantManageAndRulesAreSynced(t *testing.T) {
 		t.Fatalf("expected admin PUT status 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 
-	var permission models.UserPermission
-	if err := database.DB.Where("user_id = ? AND production_line_id = ?", f.TargetUser.ID, f.Line.ID).First(&permission).Error; err != nil {
-		t.Fatalf("load user permission: %v", err)
+	var legacyCount int64
+	if err := database.DB.Model(&models.UserPermission{}).Where("user_id = ? AND production_line_id = ?", f.TargetUser.ID, f.Line.ID).Count(&legacyCount).Error; err != nil {
+		t.Fatalf("count legacy user permission: %v", err)
 	}
-	if !permission.CanManage {
-		t.Fatalf("expected admin to grant manage permission, got %#v", permission)
+	if legacyCount != 0 {
+		t.Fatalf("expected line admin save to write only PermissionRule, legacy count=%d", legacyCount)
 	}
 
 	var allowManageRule models.PermissionRule
