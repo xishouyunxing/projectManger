@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -16,8 +17,8 @@ import (
 
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
+	r.MaxMultipartMemory = 10 << 20 // 10MB 默认上传限制
 
-	// CORS 只允许配置中的前端来源，避免携带凭据的跨域请求被任意站点调用。
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     config.AppConfig.CORS.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -26,25 +27,31 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 	}))
 
-	// 公共接口：只放无需登录即可访问的能力。
+	// 全局限流：每 IP 每秒 100 请求
+	r.Use(middleware.RateLimiter(100, 200))
+
 	public := r.Group("/api")
 	{
-		public.POST("/login", controllers.Login)
+		public.GET("/health", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		})
+		// 登录接口限流：每 IP 每分钟 5 次（防暴力破解）
+		public.POST("/login", middleware.RateLimiter(5.0/60, 5), controllers.Login)
 	}
 
-	// 受保护接口：先经过 JWT 鉴权，再按路由细分管理员权限或产线权限。
 	protected := r.Group("/api")
 	protected.Use(middleware.AuthMiddleware())
+	protected.Use(middleware.RequestTimeout(30 * time.Second))
 	{
 		users := protected.Group("/users")
 		{
-			users.GET("", middleware.AdminMiddleware(), controllers.GetUsers)
+			users.GET("", middleware.RequireAnyPermission("page:user_management", "page:permissions"), controllers.GetUsers)
 			users.GET("/:id", controllers.GetUser)
-			users.POST("", middleware.AdminMiddleware(), controllers.CreateUser)
-			users.PUT("/:id", controllers.UpdateUser)
-			users.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteUser)
+			users.POST("", middleware.RequirePermission("op:user_create"), controllers.CreateUser)
+			users.PUT("/:id", middleware.RequirePermission("op:user_edit"), controllers.UpdateUser)
+			users.DELETE("/:id", middleware.RequirePermission("op:user_delete"), controllers.DeleteUser)
 			users.PUT("/:id/password", controllers.ChangePassword)
-			users.PUT("/:id/reset-password", middleware.AdminMiddleware(), controllers.ResetPassword)
+			users.PUT("/:id/reset-password", middleware.RequirePermission("op:password_reset"), controllers.ResetPassword)
 		}
 
 		lines := protected.Group("/production-lines")
@@ -52,74 +59,79 @@ func SetupRouter() *gin.Engine {
 			lines.GET("", controllers.GetProductionLines)
 			lines.GET("/:id", controllers.GetProductionLine)
 			lines.GET("/:id/custom-fields", controllers.GetProductionLineCustomFields)
-			lines.POST("", middleware.AdminMiddleware(), controllers.CreateProductionLine)
-			lines.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdateProductionLine)
-			lines.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteProductionLine)
-			lines.POST("/:id/custom-fields", middleware.AdminMiddleware(), controllers.CreateProductionLineCustomField)
-			lines.PUT("/:id/custom-fields/:fieldId", middleware.AdminMiddleware(), controllers.UpdateProductionLineCustomField)
-			lines.DELETE("/:id/custom-fields/:fieldId", middleware.AdminMiddleware(), controllers.DeleteProductionLineCustomField)
+			lines.POST("", middleware.RequirePermission("page:production_lines"), controllers.CreateProductionLine)
+			lines.PUT("/:id", middleware.RequirePermission("page:production_lines"), controllers.UpdateProductionLine)
+			lines.DELETE("/:id", middleware.RequirePermission("page:production_lines"), controllers.DeleteProductionLine)
+			lines.POST("/:id/custom-fields", middleware.RequirePermission("page:production_lines"), controllers.CreateProductionLineCustomField)
+			lines.PUT("/:id/custom-fields/:fieldId", middleware.RequirePermission("page:production_lines"), controllers.UpdateProductionLineCustomField)
+			lines.DELETE("/:id/custom-fields/:fieldId", middleware.RequirePermission("page:production_lines"), controllers.DeleteProductionLineCustomField)
 		}
 
 		processes := protected.Group("/processes")
 		{
 			processes.GET("", controllers.GetProcesses)
 			processes.GET("/:id", controllers.GetProcess)
-			processes.POST("", middleware.AdminMiddleware(), controllers.CreateProcess)
-			processes.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdateProcess)
-			processes.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteProcess)
+			processes.POST("", middleware.RequirePermission("page:production_lines"), controllers.CreateProcess)
+			processes.PUT("/:id", middleware.RequirePermission("page:production_lines"), controllers.UpdateProcess)
+			processes.DELETE("/:id", middleware.RequirePermission("page:production_lines"), controllers.DeleteProcess)
 		}
 
 		models := protected.Group("/vehicle-models")
 		{
 			models.GET("", controllers.GetVehicleModels)
 			models.GET("/:id", controllers.GetVehicleModel)
-			models.POST("", middleware.AdminMiddleware(), controllers.CreateVehicleModel)
-			models.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdateVehicleModel)
-			models.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeleteVehicleModel)
+			models.POST("", middleware.RequirePermission("page:vehicle_models"), controllers.CreateVehicleModel)
+			models.PUT("/:id", middleware.RequirePermission("page:vehicle_models"), controllers.UpdateVehicleModel)
+			models.DELETE("/:id", middleware.RequirePermission("page:vehicle_models"), controllers.DeleteVehicleModel)
 		}
 
 		programs := protected.Group("/programs")
 		{
 			programs.GET("", controllers.GetPrograms)
-			programs.GET("/export/columns", controllers.GetExportColumns)
-			programs.GET("/export/preview", controllers.ExportPreview)
-			programs.GET("/export/stats", controllers.ExportStats)
-			programs.GET("/export/excel", controllers.ExportProgramsExcelDynamic)
+			programs.GET("/export/columns", middleware.RequirePermission("op:program_export"), controllers.GetExportColumns)
+			programs.GET("/export/preview", middleware.RequirePermission("op:program_export"), controllers.ExportPreview)
+			programs.GET("/export/stats", middleware.RequirePermission("op:program_export"), controllers.ExportStats)
+			programs.GET("/export/excel", middleware.RequirePermission("op:program_export"), controllers.ExportProgramsExcelDynamic)
 			programs.GET("/:id", controllers.GetProgram)
-			programs.POST("", controllers.CreateProgram)
-			programs.PUT("/:id", controllers.UpdateProgram)
+			programs.POST("", middleware.RequirePermission("op:program_create"), controllers.CreateProgram)
+			programs.PUT("/:id", middleware.RequirePermission("op:program_edit"), controllers.UpdateProgram)
 			programs.PUT("/:id/custom-field-values", controllers.SaveProgramCustomFieldValues)
-			programs.DELETE("/:id", controllers.DeleteProgram)
+			programs.DELETE("/:id", middleware.RequirePermission("op:program_delete"), controllers.DeleteProgram)
 			programs.GET("/by-vehicle/:vehicle_id", controllers.GetProgramsByVehicle)
 		}
 
 		files := protected.Group("/files")
 		{
-			files.POST("/upload", controllers.UploadFile)
-			files.GET("/download/:id", controllers.DownloadFile)
-			files.GET("/download/program/:program_id/latest", controllers.DownloadProgramLatestVersion)
-			files.GET("/download/version/:version", controllers.DownloadVersionFiles)
+			files.POST("/upload", middleware.RequirePermission("op:file_upload"), controllers.UploadFile)
+			files.GET("/download/:id", middleware.RequirePermission("op:file_download"), controllers.DownloadFile)
+			files.GET("/download/program/:program_id/latest", middleware.RequirePermission("op:file_download"), controllers.DownloadProgramLatestVersion)
+			files.GET("/download/version/:version", middleware.RequirePermission("op:file_download"), controllers.DownloadVersionFiles)
 			files.GET("/program/:program_id", controllers.GetProgramFiles)
-			files.DELETE("/:id", controllers.DeleteFile)
+			files.DELETE("/:id", middleware.RequirePermission("op:file_delete"), controllers.DeleteFile)
 		}
 
-		// 用户权限：包含传统明细接口和矩阵接口。
-		// 矩阵接口支持“继承/显式覆盖”，用于精确配置用户在每条产线上的最终覆盖规则。
 		permissions := protected.Group("/permissions")
 		{
-			permissions.GET("", middleware.AdminMiddleware(), controllers.GetPermissions)
-			permissions.POST("", middleware.AdminMiddleware(), controllers.CreatePermission)
-			permissions.PUT("/:id", middleware.AdminMiddleware(), controllers.UpdatePermission)
-			permissions.DELETE("/:id", middleware.AdminMiddleware(), controllers.DeletePermission)
-			permissions.GET("/user/:user_id/matrix", middleware.AdminMiddleware(), controllers.GetUserPermissionMatrix)
-			permissions.PUT("/user/:user_id/matrix", middleware.AdminMiddleware(), controllers.SaveUserPermissionMatrix)
+			permissions.GET("", middleware.RequirePermission("page:permissions"), controllers.GetPermissions)
+			permissions.POST("", middleware.RequirePermission("page:permissions"), controllers.CreatePermission)
+			permissions.PUT("/:id", middleware.RequirePermission("page:permissions"), controllers.UpdatePermission)
+			permissions.DELETE("/:id", middleware.RequirePermission("page:permissions"), controllers.DeletePermission)
+			permissions.GET("/user/:user_id/matrix", middleware.RequirePermission("page:permissions"), controllers.GetUserPermissionMatrix)
+			permissions.PUT("/user/:user_id/matrix", middleware.RequirePermission("page:permissions"), controllers.SaveUserPermissionMatrix)
 			permissions.GET("/user/:user_id", controllers.GetUserPermissions)
 			permissions.GET("/user/:user_id/effective", controllers.GetUserEffectivePermissions)
+			permissions.GET("/users/:id/effective-matrix", middleware.RequirePermission("page:permissions"), controllers.GetUserEffectivePermissionMatrix)
+			permissions.PUT("/users/:id/rules", middleware.RequirePermission("page:permissions"), controllers.SaveUserPermissionRules)
+			permissions.GET("/departments/:id/effective-matrix", middleware.RequirePermission("page:permissions"), controllers.GetDepartmentEffectivePermissionMatrix)
+			permissions.PUT("/departments/:id/rules", middleware.RequirePermission("page:permissions"), controllers.SaveDepartmentPermissionRules)
+			permissions.GET("/roles/:role/effective-matrix", middleware.RequirePermission("page:permissions"), controllers.GetRoleEffectivePermissionMatrix)
+			permissions.PUT("/roles/:role/rules", middleware.RequirePermission("page:permissions"), controllers.SaveRolePermissionRules)
+			permissions.GET("/departments/:id/default-matrix", middleware.RequirePermission("page:permissions"), controllers.GetDepartmentDefaultPermissionRuleMatrix)
+			permissions.PUT("/departments/:id/default-rules", middleware.RequirePermission("page:permissions"), controllers.SaveDepartmentDefaultPermissionRules)
 		}
 
-		// 部门权限：管理员维护部门对产线的显式授权，供部门成员继承。
 		deptPermissions := protected.Group("/department-permissions")
-		deptPermissions.Use(middleware.AdminMiddleware())
+		deptPermissions.Use(middleware.RequirePermission("page:permissions"))
 		{
 			deptPermissions.GET("", controllers.GetDepartmentPermissions)
 			deptPermissions.POST("", controllers.CreateDepartmentPermission)
@@ -129,9 +141,8 @@ func SetupRouter() *gin.Engine {
 			deptPermissions.PUT("/department/:department_id/matrix", controllers.SaveDepartmentPermissionMatrix)
 		}
 
-		// 默认权限：角色默认和部门默认只作为兜底来源，低于用户/部门显式覆盖。
 		permissionDefaults := protected.Group("/permission-defaults")
-		permissionDefaults.Use(middleware.AdminMiddleware())
+		permissionDefaults.Use(middleware.RequirePermission("page:permissions"))
 		{
 			permissionDefaults.GET("/roles/:role/matrix", controllers.GetRoleDefaultPermissionMatrix)
 			permissionDefaults.PUT("/roles/:role/matrix", controllers.SaveRoleDefaultPermissionMatrix)
@@ -139,16 +150,42 @@ func SetupRouter() *gin.Engine {
 			permissionDefaults.PUT("/departments/:department_id/matrix", controllers.SaveDepartmentDefaultPermissionMatrix)
 		}
 
+		roles := protected.Group("/roles")
+		{
+			roles.GET("", controllers.GetRoles)
+			roles.GET("/:id", controllers.GetRole)
+			roles.POST("", middleware.RequirePermission("page:permissions"), controllers.CreateRole)
+			roles.PUT("/:id", middleware.RequirePermission("page:permissions"), controllers.UpdateRole)
+			roles.DELETE("/:id", middleware.RequirePermission("page:permissions"), controllers.DeleteRole)
+			roles.GET("/:id/permissions", controllers.GetRoleLinePermissions)
+			roles.PUT("/:id/permissions", middleware.RequirePermission("page:permissions"), controllers.SaveRoleLinePermissions)
+			roles.PUT("/:id/function-permissions", middleware.RequirePermission("page:permissions"), controllers.SaveRolePermissions)
+		}
+
+		permissionDefs := protected.Group("/permission-definitions")
+		{
+			permissionDefs.GET("", controllers.GetAllPermissions)
+		}
+
+		lineAdmin := protected.Group("/line-admin")
+		{
+			lineAdmin.GET("/assignments", controllers.GetLineAdminAssignments)
+			lineAdmin.POST("/assignments", middleware.RequirePermission("op:line_permission_assign"), controllers.CreateLineAdminAssignment)
+			lineAdmin.DELETE("/assignments/:id", middleware.RequirePermission("op:line_permission_assign"), controllers.DeleteLineAdminAssignment)
+			lineAdmin.GET("/lines/:id/permissions", controllers.GetLinePermissionsByLine)
+			lineAdmin.PUT("/lines/:id/permissions", controllers.SaveLinePermissionByAdmin)
+		}
+
 		versions := protected.Group("/versions")
 		{
 			versions.GET("/program/:program_id", controllers.GetProgramVersions)
-			versions.POST("", controllers.CreateVersion)
-			versions.PUT("/:id", controllers.UpdateVersion)
-			versions.PUT("/:id/activate", controllers.ActivateVersion)
+			versions.POST("", middleware.RequirePermission("op:version_create"), controllers.CreateVersion)
+			versions.PUT("/:id", middleware.RequirePermission("op:version_manage"), controllers.UpdateVersion)
+			versions.PUT("/:id/activate", middleware.RequirePermission("op:version_manage"), controllers.ActivateVersion)
 		}
 
-		programs.POST("/batch-upload", controllers.BatchUploadPrograms)
-		programs.POST("/batch-import", controllers.BatchImportPrograms)
+		programs.POST("/batch-upload", middleware.RequirePermission("op:program_create"), controllers.BatchUploadPrograms)
+		programs.POST("/batch-import", middleware.RequirePermission("op:program_create"), controllers.BatchImportPrograms)
 
 		tasks := protected.Group("/tasks")
 		{
@@ -159,12 +196,12 @@ func SetupRouter() *gin.Engine {
 		{
 			mappings.GET("/by-parent/:program_id", controllers.GetProgramMappingsByParent)
 			mappings.GET("/by-child/:program_id", controllers.GetProgramMappingByChild)
-			mappings.POST("", controllers.CreateProgramMappings)
-			mappings.DELETE("/:id", controllers.DeleteProgramMapping)
+			mappings.POST("", middleware.RequirePermission("op:program_create"), controllers.CreateProgramMappings)
+			mappings.DELETE("/:id", middleware.RequirePermission("op:program_delete"), controllers.DeleteProgramMapping)
 		}
 
 		backup := protected.Group("/backup")
-		backup.Use(middleware.AdminMiddleware())
+		backup.Use(middleware.RequirePermission("op:backup_restore"))
 		{
 			backup.POST("/database", controllers.CreateDatabaseBackup)
 			backup.POST("/files", controllers.CreateFilesBackup)
@@ -177,7 +214,7 @@ func SetupRouter() *gin.Engine {
 		}
 
 		migration := protected.Group("/migration")
-		migration.Use(middleware.AdminMiddleware())
+		migration.Use(middleware.RequirePermission("page:system_management"))
 		{
 			migration.GET("/status", controllers.GetMigrationStatus)
 			migration.POST("/start", controllers.StartMigration)
@@ -185,13 +222,12 @@ func SetupRouter() *gin.Engine {
 		}
 
 		departments := protected.Group("/departments")
-		departments.Use(middleware.AdminMiddleware())
 		{
-			departments.GET("", controllers.GetDepartments)
+			departments.GET("", middleware.RequireAnyPermission("page:user_management", "page:permissions", "page:system_management"), controllers.GetDepartments)
 			departments.GET("/:id", controllers.GetDepartment)
-			departments.POST("", controllers.CreateDepartment)
-			departments.PUT("/:id", controllers.UpdateDepartment)
-			departments.DELETE("/:id", controllers.DeleteDepartment)
+			departments.POST("", middleware.RequirePermission("page:system_management"), controllers.CreateDepartment)
+			departments.PUT("/:id", middleware.RequirePermission("page:system_management"), controllers.UpdateDepartment)
+			departments.DELETE("/:id", middleware.RequirePermission("page:system_management"), controllers.DeleteDepartment)
 		}
 	}
 
@@ -207,8 +243,6 @@ func registerFrontendRoutes(r *gin.Engine) {
 		return
 	}
 
-	// 部署模式下由后端托管前端 dist：
-	// API 和 uploads 仍返回 404，其他 GET 路径回退到 index.html 支持 SPA 路由刷新。
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet {
 			c.Status(http.StatusNotFound)

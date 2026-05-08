@@ -20,11 +20,13 @@ import {
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, EyeOutlined, CarOutlined, ApartmentOutlined, SearchOutlined, EditOutlined, AppstoreOutlined } from '@ant-design/icons';
 import api, { extractListData, extractPagedListData } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 const VehicleModelManagement = () => {
+  const { canEdit, isAdmin, isLineAdmin } = useAuth();
   const [vehicleModels, setVehicleModels] = useState<any[]>([]);
   const [productionLines, setProductionLines] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
@@ -272,26 +274,30 @@ const VehicleModelManagement = () => {
               style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
             />
           </Tooltip>
-          <Tooltip title="编辑">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#5A6062' }} />}
-              onClick={() => handleEdit(record)}
-              style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="确定删除?"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Tooltip title="删除">
-              <Button 
+          {canEdit && (
+            <Tooltip title="编辑">
+              <Button
                 type="text"
-                icon={<DeleteOutlined style={{ color: '#A83836' }} />} 
-                style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }} 
+                icon={<EditOutlined style={{ color: '#5A6062' }} />}
+                onClick={() => handleEdit(record)}
+                style={{ width: '32px', height: '32px', borderRadius: '4px', background: '#F8F9FA' }}
               />
             </Tooltip>
-          </Popconfirm>
+          )}
+          {(isAdmin || isLineAdmin) && (
+            <Popconfirm
+              title="确定删除?"
+              onConfirm={() => handleDelete(record.id)}
+            >
+              <Tooltip title="删除">
+                <Button
+                  type="text"
+                  icon={<DeleteOutlined style={{ color: '#A83836' }} />}
+                  style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(168, 56, 54, 0.05)' }}
+                />
+              </Tooltip>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -311,25 +317,27 @@ const VehicleModelManagement = () => {
             车型管理
           </Title>
         </div>
-        <Space>
-          <Button 
-            type="primary" 
-            icon={<PlusOutlined />} 
-            onClick={handleAdd}
-            style={{
-              background: 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)',
-              border: 'none',
-              boxShadow: '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)',
-              borderRadius: '8px',
-              height: '44px',
-              padding: '0 24px',
-              fontWeight: 600,
-              fontSize: '16px'
-            }}
-          >
-            新建车型
-          </Button>
-        </Space>
+        {canEdit && (
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleAdd}
+              style={{
+                background: 'linear-gradient(176deg, #005BC1 0%, #3D89FF 100%)',
+                border: 'none',
+                boxShadow: '0px 4px 6px -4px rgba(0, 91, 193, 0.10), 0px 10px 15px -3px rgba(0, 91, 193, 0.10)',
+                borderRadius: '8px',
+                height: '44px',
+                padding: '0 24px',
+                fontWeight: 600,
+                fontSize: '16px'
+              }}
+            >
+              新建车型
+            </Button>
+          </Space>
+        )}
       </div>
 
       {/* 筛选区域 */}
@@ -435,9 +443,11 @@ const VehicleModelManagement = () => {
                 <div style={{ color: '#999', marginBottom: '16px' }}>
                   暂无车型数据
                 </div>
-                <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-                  创建第一个车型
-                </Button>
+                {canEdit && (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+                    创建第一个车型
+                  </Button>
+                )}
               </div>
             ),
           }}

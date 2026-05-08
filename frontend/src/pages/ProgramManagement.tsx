@@ -78,7 +78,7 @@ const { Step } = Steps;
 
 const ProgramManagement = () => {
   const [searchParams] = useSearchParams();
-  const { user } = useAuth();
+  const { user, canEdit, isAdmin, isLineAdmin } = useAuth();
   const selectedProgramId = Number(searchParams.get('id') || 0);
   const initialSearchKeyword = searchParams.get('keyword') || '';
 
@@ -1077,33 +1077,36 @@ const ProgramManagement = () => {
               }}
             />
           </Tooltip>
-          <Tooltip title="上传文件">
-            <Button
-              type="text"
-              icon={<UploadOutlined style={{ color: '#5A6062' }} />}
-              onClick={() => handleUpload(record)}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '4px',
-                background: '#F8F9FA',
-              }}
-            />
-          </Tooltip>
-          {/* 小铅笔: 打开编辑程序弹窗，这是编辑页入口 */}
-          <Tooltip title="编辑">
-            <Button
-              type="text"
-              icon={<EditOutlined style={{ color: '#5A6062' }} />}
-              onClick={() => handleEdit(record)}
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '4px',
-                background: '#F8F9FA',
-              }}
-            />
-          </Tooltip>
+          {canEdit && (
+            <Tooltip title="上传文件">
+              <Button
+                type="text"
+                icon={<UploadOutlined style={{ color: '#5A6062' }} />}
+                onClick={() => handleUpload(record)}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '4px',
+                  background: '#F8F9FA',
+                }}
+              />
+            </Tooltip>
+          )}
+          {canEdit && (
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                icon={<EditOutlined style={{ color: '#5A6062' }} />}
+                onClick={() => handleEdit(record)}
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '4px',
+                  background: '#F8F9FA',
+                }}
+              />
+            </Tooltip>
+          )}
           <Dropdown
             menu={{
               items: [
@@ -1119,16 +1122,20 @@ const ProgramManagement = () => {
                   label: '映射管理',
                   onClick: () => handleViewRelations(record),
                 },
-                {
-                  type: 'divider' as const,
-                },
-                {
-                  key: 'delete',
-                  icon: <DeleteOutlined />,
-                  label: '删除',
-                  danger: true,
-                  onClick: () => handleDelete(record.id),
-                },
+                ...((isAdmin || isLineAdmin)
+                  ? [
+                      {
+                        type: 'divider' as const,
+                      },
+                      {
+                        key: 'delete',
+                        icon: <DeleteOutlined />,
+                        label: '删除',
+                        danger: true,
+                        onClick: () => handleDelete(record.id),
+                      },
+                    ]
+                  : []),
               ],
             }}
           >
@@ -1336,6 +1343,7 @@ const ProgramManagement = () => {
       {/* 顶部标题区 */}
       <ProgramHeader
         batchImportSupported={batchImportSupported}
+        canEdit={canEdit}
         onExportExcel={handleExportExcel}
         onBatchImport={handleBatchImport}
         onAddProgram={handleAdd}
@@ -1516,7 +1524,7 @@ const ProgramManagement = () => {
                           保存
                         </Button>
                       </>
-                    ) : (
+                    ) : canEdit ? (
                       <Button
                         type="text"
                         className="program-editor-header-button"
@@ -1529,7 +1537,7 @@ const ProgramManagement = () => {
                       >
                         编辑
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
                 <div className="program-editor-divider program-editor-divider-tight">
@@ -1777,12 +1785,14 @@ const ProgramManagement = () => {
                     </div>
 
                     <div className="program-editor-hero-actions">
-                      <Button
-                        onClick={handleEditorRetransfer}
-                        className="program-editor-neutral-button"
-                      >
-                        重传此版本
-                      </Button>
+                      {canEdit && (
+                        <Button
+                          onClick={handleEditorRetransfer}
+                          className="program-editor-neutral-button"
+                        >
+                          重传此版本
+                        </Button>
+                      )}
                       <Button
                         type="primary"
                         onClick={() => void handleEditorDownloadAll()}
@@ -1836,7 +1846,7 @@ const ProgramManagement = () => {
                             <span>版本说明</span>
                           </div>
                           <div className="program-editor-meta-label-actions">
-                            {versionChangeLogSupported ? (
+                            {versionChangeLogSupported && canEdit ? (
                               isEditingDescription ? (
                                 <>
                                   <Button
@@ -1989,23 +1999,25 @@ const ProgramManagement = () => {
                                     />
                                   </div>
                                 </Tooltip>
-                                <Popconfirm
-                                  title="确定删除这个文件吗？"
-                                  onConfirm={() =>
-                                    handleDeleteSingleFile(file.id)
-                                  }
-                                >
-                                  <Tooltip title="删除文件">
-                                    <div className="program-editor-file-action delete">
-                                      <DeleteOutlined
-                                        style={{
-                                          color: '#A83836',
-                                          fontSize: '16px',
-                                        }}
-                                      />
-                                    </div>
-                                  </Tooltip>
-                                </Popconfirm>
+                                {canEdit && (
+                                  <Popconfirm
+                                    title="确定删除这个文件吗？"
+                                    onConfirm={() =>
+                                      handleDeleteSingleFile(file.id)
+                                    }
+                                  >
+                                    <Tooltip title="删除文件">
+                                      <div className="program-editor-file-action delete">
+                                        <DeleteOutlined
+                                          style={{
+                                            color: '#A83836',
+                                            fontSize: '16px',
+                                          }}
+                                        />
+                                      </div>
+                                    </Tooltip>
+                                  </Popconfirm>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -2108,19 +2120,21 @@ const ProgramManagement = () => {
               >
                 下载全部
               </Button>
-              <Button
-                aria-label="进入编辑"
-                type="primary"
-                className="program-view-primary-button"
-                onClick={() => {
-                  setFileModalVisible(false);
-                  if (currentProgram) {
-                    void handleEdit(currentProgram);
-                  }
-                }}
-              >
-                进入编辑
-              </Button>
+              {canEdit && (
+                <Button
+                  aria-label="进入编辑"
+                  type="primary"
+                  className="program-view-primary-button"
+                  onClick={() => {
+                    setFileModalVisible(false);
+                    if (currentProgram) {
+                      void handleEdit(currentProgram);
+                    }
+                  }}
+                >
+                  进入编辑
+                </Button>
+              )}
             </div>
           </div>
 

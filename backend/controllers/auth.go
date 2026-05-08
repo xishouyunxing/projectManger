@@ -5,7 +5,9 @@ import (
 	"crane-system/database"
 	"crane-system/middleware"
 	"crane-system/models"
+	"crane-system/services"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +61,39 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// 加载用户权限数据
+	permData, err := services.GetUserPermissions(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "加载权限失败"})
+		return
+	}
+
+	// 构建产线权限响应
+	linePerms := make(map[string]gin.H)
+	lineIDs := make([]string, 0)
+	for lineID, lp := range permData.LinePermissions {
+		key := strconv.FormatUint(uint64(lineID), 10)
+		linePerms[key] = gin.H{
+			"can_view":     lp.CanView,
+			"can_download": lp.CanDownload,
+			"can_upload":   lp.CanUpload,
+			"can_manage":   lp.CanManage,
+		}
+		lineIDs = append(lineIDs, key)
+	}
+
+	// 构建 managed_line_ids
+	managedIDs := make([]string, 0, len(permData.ManagedLineIDs))
+	for _, id := range permData.ManagedLineIDs {
+		managedIDs = append(managedIDs, strconv.FormatUint(uint64(id), 10))
+	}
+
+	// 获取角色ID
+	var roleIDPtr *uint
+	if user.RoleID != nil {
+		roleIDPtr = user.RoleID
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": tokenString,
 		"user": gin.H{
@@ -67,6 +102,12 @@ func Login(c *gin.Context) {
 			"name":        user.Name,
 			"department":  user.Department,
 			"role":        user.Role,
+			"role_id":     roleIDPtr,
+		},
+		"permissions": gin.H{
+			"codes":            permData.FunctionCodes,
+			"lines":            linePerms,
+			"managed_line_ids": managedIDs,
 		},
 	})
 }

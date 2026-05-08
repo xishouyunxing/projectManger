@@ -1,12 +1,11 @@
 import {
+  fireEvent,
   render,
   screen,
-  fireEvent,
   waitFor,
   within,
 } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import PermissionManagement from './PermissionManagement';
 import api from '../services/api';
@@ -15,7 +14,22 @@ vi.mock('../services/api', () => ({
   default: {
     get: vi.fn(),
     put: vi.fn(),
+    post: vi.fn(),
+    delete: vi.fn(),
   },
+}));
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { id: 1, name: 'Admin', role: 'system_admin', employee_id: 'A001' },
+    token: 'test-token',
+    isAdmin: true,
+    isLineAdmin: false,
+    permissions: { codes: [], lines: {}, managed_line_ids: [] },
+    hasPermission: () => true,
+    hasLinePermission: () => true,
+    isLineManager: () => true,
+  }),
 }));
 
 const mockApiGet = api.get as Mock;
@@ -26,15 +40,8 @@ const users = [
     id: 1,
     name: 'Alice',
     employee_id: 'U001',
-    role: 'user',
-    department: { name: '制造部' },
-  },
-  {
-    id: 2,
-    name: 'Bob',
-    employee_id: 'U002',
-    role: 'admin',
-    department: { name: '工艺部' },
+    role: 'engineer',
+    department: { id: 1, name: '制造部' },
   },
 ];
 
@@ -43,29 +50,54 @@ const departments = [
   { id: 2, name: '工艺部' },
 ];
 
-const productionLines = [
-  { id: 10, name: '总装线' },
-  { id: 11, name: '调试线' },
+const roles = [
+  { id: 2, name: 'engineer', display_name: '工程师' },
+  { id: 5, name: 'viewer', display_name: '查看者' },
 ];
 
-const matrixRows = [
+const makeCell = (
+  action: string,
+  setting: 'unset' | 'allow' | 'deny',
+  effective: 'allow' | 'deny',
+  source = 'department',
+) => ({
+  action,
+  setting,
+  setting_label:
+    setting === 'unset' ? '按规则' : setting === 'allow' ? '允许' : '拒绝',
+  effective,
+  effective_label: effective === 'allow' ? '允许' : '拒绝',
+  source,
+  source_label:
+    source === 'department'
+      ? '部门规则'
+      : source === 'user'
+        ? '单独设置'
+        : '系统默认',
+});
+
+const matrixItems = [
   {
-    production_line_id: 10,
-    production_line_name: '总装线',
-    can_view: true,
-    can_download: false,
-    can_upload: false,
-    can_manage: false,
-    source: 'user',
+    resource_type: 'production_line',
+    resource_id: 10,
+    resource_name: '总装线',
+    actions: {
+      view: makeCell('view', 'unset', 'allow'),
+      download: makeCell('download', 'deny', 'deny', 'user'),
+      upload: makeCell('upload', 'unset', 'deny', 'system_default'),
+      manage: makeCell('manage', 'unset', 'deny', 'system_default'),
+    },
   },
   {
-    production_line_id: 11,
-    production_line_name: '调试线',
-    can_view: false,
-    can_download: false,
-    can_upload: false,
-    can_manage: false,
-    source: 'none',
+    resource_type: 'production_line',
+    resource_id: 11,
+    resource_name: '调试线',
+    actions: {
+      view: makeCell('view', 'unset', 'deny', 'system_default'),
+      download: makeCell('download', 'unset', 'deny', 'system_default'),
+      upload: makeCell('upload', 'unset', 'deny', 'system_default'),
+      manage: makeCell('manage', 'unset', 'deny', 'system_default'),
+    },
   },
 ];
 
@@ -76,169 +108,132 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
-const openSelect = (testID: string) => {
-  const select = screen.getByTestId(testID);
-  fireEvent.mouseDown(within(select).getByRole('combobox'));
-};
-
-const clickLastVisibleText = async (text: string) => {
-  await waitFor(() => {
-    expect(screen.queryAllByText(text).length).toBeGreaterThan(0);
-  });
-  const matches = screen.queryAllByText(text);
-  fireEvent.click(matches[matches.length - 1]);
-};
-
-describe('PermissionManagement permission matrices', () => {
+describe('PermissionManagement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
     mockApiGet.mockImplementation((url: string) => {
-      if (url === '/users') {
-        return Promise.resolve({ data: users });
-      }
-      if (url === '/departments') {
-        return Promise.resolve({ data: departments });
-      }
-      if (url === '/production-lines') {
-        return Promise.resolve({ data: productionLines });
-      }
-      if (
-        url === '/permissions/user/1/matrix' ||
-        url === '/permissions/user/2/matrix' ||
-        url === '/department-permissions/department/1/matrix' ||
-        url === '/department-permissions/department/2/matrix' ||
-        url === '/permission-defaults/roles/user/matrix' ||
-        url === '/permission-defaults/roles/admin/matrix' ||
-        url === '/permission-defaults/departments/1/matrix' ||
-        url === '/permission-defaults/departments/2/matrix'
-      ) {
-        return Promise.resolve({ data: { items: matrixRows } });
+      if (url === '/users') return Promise.resolve({ data: users });
+      if (url === '/departments') return Promise.resolve({ data: departments });
+      if (url === '/roles') return Promise.resolve({ data: roles });
+      if (url.includes('effective-matrix') || url.includes('default-matrix')) {
+        return Promise.resolve({ data: { items: matrixItems } });
       }
       return Promise.reject(new Error(`Unhandled GET ${url}`));
     });
 
-    mockApiPut.mockResolvedValue({ data: { message: 'ok' } });
+    mockApiPut.mockResolvedValue({ data: { items: matrixItems } });
   });
 
-  it('loads users, departments, and production lines on initial render', async () => {
+  it('renders the four permission rule tabs without technical wording', async () => {
     renderPage();
 
-    await screen.findByRole('heading', { name: '权限管理' });
-
-    await waitFor(() => {
-      expect(mockApiGet).toHaveBeenCalledWith('/users');
-      expect(mockApiGet).toHaveBeenCalledWith('/departments');
-      expect(mockApiGet).toHaveBeenCalledWith('/production-lines');
-    });
+    expect(await screen.findByText('权限管理')).toBeTruthy();
+    expect(screen.getByText('用户权限')).toBeTruthy();
+    expect(screen.getByText('部门规则')).toBeTruthy();
+    expect(screen.getByText('角色规则')).toBeTruthy();
+    expect(screen.getByText('部门默认规则')).toBeTruthy();
+    expect(screen.queryByText(/继承|覆盖|allow|deny|unset|policy/)).toBeNull();
   });
 
-  it('loads a selected user matrix and saves exact permission booleans', async () => {
+  it('loads the user permission matrix from the rule API', async () => {
     renderPage();
 
-    await screen.findByText('总装线');
-    openSelect('user-matrix-select');
-    fireEvent.click(await screen.findByText(/Bob/));
-
     await waitFor(() => {
-      expect(mockApiGet).toHaveBeenCalledWith('/permissions/user/2/matrix');
+      expect(mockApiGet).toHaveBeenCalledWith(
+        '/permissions/users/1/effective-matrix',
+      );
     });
+    expect(await screen.findByText('总装线')).toBeTruthy();
+    expect(screen.getAllByText('按规则').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('部门规则').length).toBeGreaterThan(0);
+  });
 
-    fireEvent.click(screen.getByLabelText('总装线 下载'));
-    fireEvent.click(screen.getAllByRole('button', { name: /保存/ })[0]);
+  it('submits only the changed cell when setting one permission to refuse', async () => {
+    renderPage();
+
+    const selector = await screen.findByLabelText('总装线-查看-设置');
+    fireEvent.click(within(selector).getByText('拒绝'));
+    fireEvent.click(screen.getByRole('button', { name: /保存 1 项/ }));
 
     await waitFor(() => {
-      expect(mockApiPut).toHaveBeenCalledWith('/permissions/user/2/matrix', {
-        permissions: [
+      expect(mockApiPut).toHaveBeenCalledWith('/permissions/users/1/rules', {
+        changes: [
           {
-            production_line_id: 10,
-            inherit: false,
-            can_view: true,
-            can_download: true,
-            can_upload: false,
-            can_manage: false,
+            resource_type: 'production_line',
+            resource_id: 10,
+            action: 'view',
+            decision: 'deny',
           },
         ],
       });
     });
   });
 
-  it('can save an explicit all-false override for a row that currently inherits nothing', async () => {
+  it('submits unset when changing a separate setting back to rule based mode', async () => {
     renderPage();
 
-    await screen.findByText(productionLines[1].name);
-    fireEvent.click(screen.getByLabelText(`${productionLines[1].name} 覆盖`));
-    fireEvent.click(screen.getAllByRole('button', { name: /保存/ })[0]);
+    const selector = await screen.findByLabelText('总装线-下载-设置');
+    fireEvent.click(within(selector).getByText('按规则'));
+    fireEvent.click(screen.getByRole('button', { name: /保存 1 项/ }));
 
     await waitFor(() => {
-      expect(mockApiPut).toHaveBeenCalledWith('/permissions/user/1/matrix', {
-        permissions: [
+      expect(mockApiPut).toHaveBeenCalledWith('/permissions/users/1/rules', {
+        changes: [
           {
-            production_line_id: 11,
-            inherit: false,
-            can_view: false,
-            can_download: false,
-            can_upload: false,
-            can_manage: false,
+            resource_type: 'production_line',
+            resource_id: 10,
+            action: 'download',
+            decision: 'unset',
           },
         ],
       });
     });
   });
 
-  it('can clear an existing user override back to inheritance', async () => {
+  it('loads department, role and department default matrices from their rule APIs', async () => {
     renderPage();
 
-    await screen.findByText(productionLines[0].name);
-    fireEvent.click(screen.getByLabelText(`${productionLines[0].name} 覆盖`));
-    fireEvent.click(screen.getAllByRole('button', { name: /保存/ })[0]);
-
+    fireEvent.click(await screen.findByText('部门规则'));
     await waitFor(() => {
-      expect(mockApiPut).toHaveBeenCalledWith('/permissions/user/1/matrix', {
-        permissions: [
-          {
-            production_line_id: 10,
-            inherit: true,
-            can_view: false,
-            can_download: false,
-            can_upload: false,
-            can_manage: false,
-          },
-        ],
-      });
+      expect(mockApiGet).toHaveBeenCalledWith(
+        '/permissions/departments/1/effective-matrix',
+      );
+    });
+
+    fireEvent.click(screen.getByText('角色规则'));
+    await waitFor(() => {
+      expect(mockApiGet).toHaveBeenCalledWith(
+        '/permissions/roles/2/effective-matrix',
+      );
+    });
+
+    fireEvent.click(screen.getByText('部门默认规则'));
+    await waitFor(() => {
+      expect(mockApiGet).toHaveBeenCalledWith(
+        '/permissions/departments/1/default-matrix',
+      );
     });
   });
 
-  it('loads department, role default, and department default matrices by owner selection', async () => {
-    renderPage();
+  it('shows the matching rule source label when editing non-user rule tabs', async () => {
+    const { container } = renderPage();
 
-    await screen.findByText('用户权限矩阵');
-    fireEvent.click(screen.getByText('部门权限矩阵'));
-    openSelect('department-matrix-select');
-    await clickLastVisibleText('工艺部');
-
+    fireEvent.click(await screen.findByRole('tab', { name: /\u89d2\u8272\u89c4\u5219/ }));
     await waitFor(() => {
       expect(mockApiGet).toHaveBeenCalledWith(
-        '/department-permissions/department/2/matrix',
+        '/permissions/roles/2/effective-matrix',
       );
     });
 
-    fireEvent.click(screen.getByText('角色默认权限'));
-
-    await waitFor(() => {
-      expect(mockApiGet).toHaveBeenCalledWith(
-        '/permission-defaults/roles/user/matrix',
-      );
+    const selector = await waitFor(() => {
+      const activePanel = container.querySelector('.ant-tabs-tabpane-active');
+      const segmented = activePanel?.querySelector('.ant-segmented');
+      expect(segmented).toBeTruthy();
+      return segmented as HTMLElement;
     });
+    fireEvent.click(within(selector).getByText('\u5141\u8bb8'));
 
-    fireEvent.click(screen.getByText('部门默认权限'));
-    openSelect('department-default-select');
-    await clickLastVisibleText('工艺部');
-
-    await waitFor(() => {
-      expect(mockApiGet).toHaveBeenCalledWith(
-        '/permission-defaults/departments/2/matrix',
-      );
-    });
+    expect(screen.getAllByText('\u89d2\u8272\u89c4\u5219').length).toBeGreaterThan(1);
   });
 });

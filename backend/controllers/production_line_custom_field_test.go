@@ -6,6 +6,7 @@ import (
 	"crane-system/database"
 	"crane-system/middleware"
 	"crane-system/models"
+	"crane-system/services"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -45,11 +46,19 @@ func openProductionLineCustomFieldTestDB(t *testing.T) *gorm.DB {
 		&models.DepartmentPermission{},
 		&models.RoleDefaultPermission{},
 		&models.DepartmentDefaultPermission{},
+		&models.PermissionRule{},
+		&models.Role{},
+		&models.Permission{},
+		&models.RolePermission{},
+		&models.UserPermissionOverride{},
+		&models.RoleLinePermission{},
+		&models.LineAdminAssignment{},
 		&models.VehicleModel{},
 	); err != nil {
 		t.Fatalf("auto migrate test db: %v", err)
 	}
 
+	services.InvalidateAllCache()
 	return db
 }
 

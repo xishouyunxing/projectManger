@@ -3,6 +3,7 @@ package controllers
 import (
 	"crane-system/database"
 	"crane-system/models"
+	"crane-system/services"
 	"errors"
 	"net/http"
 
@@ -56,6 +57,16 @@ func CreateDepartmentPermission(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新权限失败"})
 			return
 		}
+		if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: existing.DepartmentID}, linePermissionBits{
+			ProductionLineID: existing.ProductionLineID,
+			CanView:          existing.CanView,
+			CanDownload:      existing.CanDownload,
+			CanUpload:        existing.CanUpload,
+			CanManage:        existing.CanManage,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
+			return
+		}
 		c.JSON(http.StatusOK, existing)
 		return
 	}
@@ -74,6 +85,16 @@ func CreateDepartmentPermission(c *gin.Context) {
 
 	if err := database.DB.Preload("Department").Preload("ProductionLine").Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&permission).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
+		ProductionLineID: permission.ProductionLineID,
+		CanView:          permission.CanView,
+		CanDownload:      permission.CanDownload,
+		CanUpload:        permission.CanUpload,
+		CanManage:        permission.CanManage,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
 		return
 	}
 
@@ -160,6 +181,16 @@ func UpdateDepartmentPermission(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
+	if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
+		ProductionLineID: permission.ProductionLineID,
+		CanView:          permission.CanView,
+		CanDownload:      permission.CanDownload,
+		CanUpload:        permission.CanUpload,
+		CanManage:        permission.CanManage,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
+		return
+	}
 
 	c.JSON(http.StatusOK, permission)
 }
@@ -171,6 +202,12 @@ func DeleteDepartmentPermission(c *gin.Context) {
 		return
 	}
 
+	var permission models.DepartmentPermission
+	if err := database.DB.First(&permission, permissionID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
+		return
+	}
+
 	result := database.DB.Unscoped().Delete(&models.DepartmentPermission{}, permissionID)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
@@ -178,6 +215,10 @@ func DeleteDepartmentPermission(c *gin.Context) {
 	}
 	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
+		return
+	}
+	if err := clearLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, permission.ProductionLineID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
 		return
 	}
 
@@ -216,27 +257,34 @@ func GetUserEffectivePermissions(c *gin.Context) {
 		Source             string `json:"source"`
 	}
 
-	resolvedPermissions, err := resolveUserLinePermissions(user, productionLines)
+	// 使用新的权限服务获取有效权限
+	permData, err := services.GetUserPermissions(user.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询权限失败"})
 		return
 	}
 
-	var effectivePermissions []EffectivePermission
 	lineNames := make(map[uint]string, len(productionLines))
 	for _, line := range productionLines {
 		lineNames[line.ID] = line.Name
 	}
-	for _, permission := range resolvedPermissions {
-		effectivePermissions = append(effectivePermissions, EffectivePermission{
-			ProductionLineID:   permission.ProductionLineID,
-			ProductionLineName: lineNames[permission.ProductionLineID],
-			CanView:            permission.CanView,
-			CanDownload:        permission.CanDownload,
-			CanUpload:          permission.CanUpload,
-			CanManage:          permission.CanManage,
-			Source:             permission.Source,
-		})
+
+	var effectivePermissions []EffectivePermission
+	for _, line := range productionLines {
+		ep := EffectivePermission{
+			ProductionLineID:   line.ID,
+			ProductionLineName: line.Name,
+		}
+		if lp, ok := permData.LinePermissions[line.ID]; ok {
+			ep.CanView = lp.CanView
+			ep.CanDownload = lp.CanDownload
+			ep.CanUpload = lp.CanUpload
+			ep.CanManage = lp.CanManage
+			ep.Source = lp.Source
+		} else {
+			ep.Source = "none"
+		}
+		effectivePermissions = append(effectivePermissions, ep)
 	}
 
 	c.JSON(http.StatusOK, effectivePermissions)

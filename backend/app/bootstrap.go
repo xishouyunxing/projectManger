@@ -5,6 +5,8 @@ import (
 	"crane-system/database"
 	"crane-system/router"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -50,7 +52,20 @@ func ServerAddress(cfg *config.Config) string {
 	return ":" + cfg.App.ServerPort
 }
 
-func BootstrapServer() (*config.Config, *gin.Engine, error) {
+// BuildAppServer 创建带超时配置的 http.Server，支持优雅关闭。
+func BuildAppServer(engine *gin.Engine, addr string) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           engine,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
+	}
+}
+
+func BootstrapServer() (*config.Config, *http.Server, error) {
 	cfg, err := SetupInfrastructure()
 	if err != nil {
 		return nil, nil, err
@@ -60,5 +75,7 @@ func BootstrapServer() (*config.Config, *gin.Engine, error) {
 		return nil, nil, fmt.Errorf("run migrations: %w", err)
 	}
 
-	return cfg, BuildHTTPServer(), nil
+	engine := BuildHTTPServer()
+	srv := BuildAppServer(engine, ServerAddress(cfg))
+	return cfg, srv, nil
 }
