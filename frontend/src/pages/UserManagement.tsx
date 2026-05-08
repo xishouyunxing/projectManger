@@ -215,19 +215,30 @@ const UserManagement = () => {
       dataIndex: 'role',
       key: 'role',
       render: (role: string) => {
-        const isAdmin = role === 'admin';
+        const roleDisplayMap: Record<string, { label: string; bg: string; color: string }> = {
+          admin: { label: '管理员', bg: 'rgba(255, 77, 79, 0.20)', color: '#F53F3F' },
+          system_admin: { label: '系统管理员', bg: 'rgba(255, 77, 79, 0.20)', color: '#F53F3F' },
+          line_admin: { label: '产线管理员', bg: 'rgba(247, 167, 43, 0.20)', color: '#D48806' },
+          offline_programmer: { label: '离线编程人员', bg: 'rgba(61, 137, 255, 0.20)', color: '#005BC1' },
+          engineer: { label: '离线编程人员', bg: 'rgba(61, 137, 255, 0.20)', color: '#005BC1' },
+          field_operator: { label: '现场操作员', bg: 'rgba(82, 196, 26, 0.20)', color: '#389E0D' },
+          operator: { label: '现场操作员', bg: 'rgba(82, 196, 26, 0.20)', color: '#389E0D' },
+          viewer: { label: '查看者', bg: 'rgba(61, 137, 255, 0.20)', color: '#005BC1' },
+          user: { label: '普通用户', bg: 'rgba(61, 137, 255, 0.20)', color: '#005BC1' },
+        };
+        const config = roleDisplayMap[role] || { label: role || '未知', bg: 'rgba(120, 120, 120, 0.20)', color: '#787878' };
         return (
-          <div style={{ 
-            background: isAdmin ? 'rgba(255, 77, 79, 0.20)' : 'rgba(61, 137, 255, 0.20)', 
-            borderRadius: '9999px', 
-            display: 'inline-flex', 
+          <div style={{
+            background: config.bg,
+            borderRadius: '9999px',
+            display: 'inline-flex',
             alignItems: 'center',
             padding: '2px 10px',
             gap: '6px'
           }}>
-            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: isAdmin ? '#F53F3F' : '#005BC1' }}></div>
-            <span style={{ color: isAdmin ? '#F53F3F' : '#005BC1', fontSize: '11px', fontWeight: 700 }}>
-              {isAdmin ? '管理员' : '普通用户'}
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: config.color }}></div>
+            <span style={{ color: config.color, fontSize: '11px', fontWeight: 700 }}>
+              {config.label}
             </span>
           </div>
         );
@@ -400,8 +411,10 @@ const UserManagement = () => {
               allowClear
               style={{ width: '100%' }}
             >
-              <Select.Option value="admin">管理员</Select.Option>
-              <Select.Option value="user">普通用户</Select.Option>
+              <Select.Option value="system_admin">系统管理员</Select.Option>
+              <Select.Option value="line_admin">产线管理员</Select.Option>
+              <Select.Option value="offline_programmer">离线编程人员</Select.Option>
+              <Select.Option value="field_operator">现场操作员</Select.Option>
             </Select>
           </div>
           <div className="management-filter-field">
@@ -505,8 +518,10 @@ const UserManagement = () => {
           </Form.Item>
           <Form.Item name="role" label="角色" rules={[{ required: true }]}>
             <Select>
-              <Select.Option value="user">普通用户</Select.Option>
-              <Select.Option value="admin">管理员</Select.Option>
+              <Select.Option value="system_admin">系统管理员</Select.Option>
+              <Select.Option value="line_admin">产线管理员</Select.Option>
+              <Select.Option value="offline_programmer">离线编程人员</Select.Option>
+              <Select.Option value="field_operator">现场操作员</Select.Option>
             </Select>
           </Form.Item>
           {!currentUser && (

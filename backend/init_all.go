@@ -7,6 +7,8 @@ import (
 	"crane-system/models"
 	"golang.org/x/crypto/bcrypt"
 	"log"
+
+	"gorm.io/gorm/clause"
 )
 
 func InitAll() {
@@ -24,6 +26,8 @@ func InitAll() {
 	createDepartments()
 	createRoles()
 	createPermissions()
+	seedRoleDefaults()
+	seedDepartmentDefaults()
 	createAdmin(cfg)
 
 	log.Println("系统数据初始化完成")
@@ -91,15 +95,18 @@ func createAdmin(cfg *config.Config) {
 func createRoles() {
 	roles := []models.Role{
 		{Name: "system_admin", Description: "系统管理员，全部权限", IsPreset: true, IsSystem: true, Status: "active", SortOrder: 1},
-		{Name: "line_admin", Description: "产线管理员，可管理指定产线并分配权限", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 2},
-		{Name: "engineer", Description: "工程师，产线查看/下载/上传", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 3},
-		{Name: "operator", Description: "操作员，产线查看/下载", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 4},
+		{Name: "line_admin", Description: "产线管理员，可管理产线并编辑所有数据", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 2},
+		{Name: "offline_programmer", Description: "离线编程人员，可上传下载和编辑程序车型", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 3},
+		{Name: "field_operator", Description: "现场操作员，默认查看下载，可按产线指定权限", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 4},
+		// 保留旧角色用于兼容，新建用户不再使用
 		{Name: "viewer", Description: "访客，产线只读", IsPreset: true, IsSystem: false, Status: "active", SortOrder: 5},
 	}
 
 	for _, role := range roles {
 		var existing models.Role
 		if database.DB.Where("name = ?", role.Name).First(&existing).Error == nil {
+			// 更新已有预设角色的描述
+			database.DB.Model(&existing).Update("description", role.Description)
 			continue
 		}
 		database.DB.Create(&role)
@@ -160,16 +167,27 @@ func assignDefaultRolePermissions() {
 		permMap[p.Code] = p.ID
 	}
 
-	// 定义每个角色的权限
+	// 定义每个角色的功能权限
 	rolePermDefs := map[string][]string{
 		"line_admin": {
 			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
-			"page:permissions",
+			"page:production_lines", "page:vehicle_models",
 			"op:program_create", "op:program_edit", "op:program_delete", "op:program_export",
 			"op:file_upload", "op:file_download", "op:file_delete",
 			"op:version_create", "op:version_manage",
-			"op:line_permission_assign",
 		},
+		"offline_programmer": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+			"page:vehicle_models",
+			"op:program_create", "op:program_edit", "op:program_export",
+			"op:file_upload", "op:file_download",
+			"op:version_create", "op:version_manage",
+		},
+		"field_operator": {
+			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
+			"op:file_download",
+		},
+		// 旧角色保持兼容
 		"engineer": {
 			"page:dashboard", "page:programs", "page:program_matrix", "page:file_ignore_list",
 			"op:program_create", "op:program_edit", "op:program_export",
@@ -294,4 +312,121 @@ func createProductionLines() {
 		database.DB.Create(&line)
 	}
 	log.Printf("创建生产线数据成功")
+}
+
+// seedRoleDefaults 为预设角色创建全局默认产线权限（subject_type="role_default", resource_id=0）。
+// 这些规则在权限解析链中介于角色规则和部门默认规则之间，作为角色的兜底默认值。
+func seedRoleDefaults() {
+	// 加载角色
+	roleMap := map[string]uint{}
+	var roles []models.Role
+	database.DB.Find(&roles)
+	for _, r := range roles {
+		roleMap[r.Name] = r.ID
+	}
+
+	type ruleSeed struct {
+		roleName string
+		action   string
+		decision string
+	}
+
+	seeds := []ruleSeed{
+		// 现场操作员：默认 view + download
+		{"field_operator", models.PermissionActionView, models.PermissionDecisionAllow},
+		{"field_operator", models.PermissionActionDownload, models.PermissionDecisionAllow},
+		// 离线编程人员：默认 view + download + upload
+		{"offline_programmer", models.PermissionActionView, models.PermissionDecisionAllow},
+		{"offline_programmer", models.PermissionActionDownload, models.PermissionDecisionAllow},
+		{"offline_programmer", models.PermissionActionUpload, models.PermissionDecisionAllow},
+		// 产线管理员：默认 view + download + upload + manage
+		{"line_admin", models.PermissionActionView, models.PermissionDecisionAllow},
+		{"line_admin", models.PermissionActionDownload, models.PermissionDecisionAllow},
+		{"line_admin", models.PermissionActionUpload, models.PermissionDecisionAllow},
+		{"line_admin", models.PermissionActionManage, models.PermissionDecisionAllow},
+		// 旧角色兼容
+		{"operator", models.PermissionActionView, models.PermissionDecisionAllow},
+		{"operator", models.PermissionActionDownload, models.PermissionDecisionAllow},
+		{"engineer", models.PermissionActionView, models.PermissionDecisionAllow},
+		{"engineer", models.PermissionActionDownload, models.PermissionDecisionAllow},
+		{"engineer", models.PermissionActionUpload, models.PermissionDecisionAllow},
+	}
+
+	rules := make([]models.PermissionRule, 0, len(seeds))
+	for _, s := range seeds {
+		roleID, ok := roleMap[s.roleName]
+		if !ok {
+			continue
+		}
+		rules = append(rules, models.PermissionRule{
+			SubjectType:  "role_default",
+			SubjectID:    roleID,
+			SubjectKey:   "",
+			ResourceType: models.PermissionResourceProductionLine,
+			ResourceID:   0,
+			Action:       s.action,
+			Decision:     s.decision,
+		})
+	}
+
+	if len(rules) > 0 {
+		if err := database.DB.Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "subject_type"}, {Name: "subject_id"}, {Name: "subject_key"},
+				{Name: "resource_type"}, {Name: "resource_id"}, {Name: "action"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{"decision", "updated_at"}),
+		}).Create(&rules).Error; err != nil {
+			log.Printf("种子角色默认权限失败: %v", err)
+		} else {
+			log.Println("角色默认产线权限种子完成")
+		}
+	}
+}
+
+// seedDepartmentDefaults 为"制造部"创建部门默认产线权限。
+// 确保制造部用户无论什么角色，默认只能查看和下载。
+func seedDepartmentDefaults() {
+	var dept models.Department
+	if err := database.DB.Where("name = ?", "制造部").First(&dept).Error; err != nil {
+		// 制造部不存在，跳过
+		return
+	}
+
+	type ruleSeed struct {
+		action   string
+		decision string
+	}
+
+	seeds := []ruleSeed{
+		{models.PermissionActionView, models.PermissionDecisionAllow},
+		{models.PermissionActionDownload, models.PermissionDecisionAllow},
+	}
+
+	rules := make([]models.PermissionRule, 0, len(seeds))
+	for _, s := range seeds {
+		rules = append(rules, models.PermissionRule{
+			SubjectType:  models.PermissionSubjectDepartmentDefault,
+			SubjectID:    dept.ID,
+			SubjectKey:   "",
+			ResourceType: models.PermissionResourceProductionLine,
+			ResourceID:   0,
+			Action:       s.action,
+			Decision:     s.decision,
+		})
+	}
+
+	if len(rules) > 0 {
+		if err := database.DB.Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "subject_type"}, {Name: "subject_id"}, {Name: "subject_key"},
+				{Name: "resource_type"}, {Name: "resource_id"}, {Name: "action"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{"decision", "updated_at"}),
+		}).Create(&rules).Error; err != nil {
+			log.Printf("种子制造部默认权限失败: %v", err)
+		} else {
+			log.Println("制造部默认产线权限种子完成")
+		}
+	}
 }

@@ -44,6 +44,10 @@ interface AuthContextType {
   logout: () => void;
   isAdmin: boolean;
   isLineAdmin: boolean;
+  isOperator: boolean;
+  isProgrammer: boolean;
+  isManager: boolean;
+  canEdit: boolean;
   permissions: UserPermissions;
   hasPermission: (code: string) => boolean;
   hasLinePermission: (lineId: number | string, action: string) => boolean;
@@ -205,6 +209,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const isAdmin = user?.role === 'admin' || user?.role === 'system_admin';
   const isLineAdmin = user?.role === 'line_admin';
+  const isOperator = user?.role === 'field_operator' || user?.role === 'operator';
+  const isProgrammer = user?.role === 'offline_programmer' || user?.role === 'engineer';
+  const isManager = isAdmin || isLineAdmin;
+  const canEdit = isAdmin || isLineAdmin || isProgrammer;
 
   const hasPermission = useCallback(
     (code: string): boolean => {
@@ -253,6 +261,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         logout,
         isAdmin,
         isLineAdmin,
+        isOperator,
+        isProgrammer,
+        isManager,
+        canEdit,
         permissions,
         hasPermission,
         hasLinePermission,

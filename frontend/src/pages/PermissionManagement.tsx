@@ -8,16 +8,20 @@ import {
   Space,
   Table,
   Tabs,
-  Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import {
   ApartmentOutlined,
+  CloudDownloadOutlined,
+  EditOutlined,
+  EyeOutlined,
   ReloadOutlined,
   SaveOutlined,
   TeamOutlined,
+  UploadOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import api from '../services/api';
@@ -95,15 +99,15 @@ const selectTheme = {
 
 /* ────────────────── 常量 ────────────────── */
 
-const actionConfigs: Array<{ key: ActionKey; label: string }> = [
-  { key: 'view', label: '查看' },
-  { key: 'download', label: '下载' },
-  { key: 'upload', label: '上传' },
-  { key: 'manage', label: '管理' },
+const actionConfigs: Array<{ key: ActionKey; label: string; description: string; icon: React.ReactNode }> = [
+  { key: 'view', label: '查看程序列表', description: '浏览产线下的程序、版本和文件信息', icon: <EyeOutlined /> },
+  { key: 'download', label: '下载程序文件', description: '下载产线下的程序文件到本地', icon: <CloudDownloadOutlined /> },
+  { key: 'upload', label: '上传新版本', description: '上传文件、创建新版本', icon: <UploadOutlined /> },
+  { key: 'manage', label: '编辑与删除', description: '编辑程序属性、删除程序或文件', icon: <EditOutlined /> },
 ];
 
 const decisionOptions: Array<{ label: string; value: Decision }> = [
-  { label: '按规则', value: 'unset' },
+  { label: '跟随', value: 'unset' },
   { label: '允许', value: 'allow' },
   { label: '拒绝', value: 'deny' },
 ];
@@ -118,24 +122,24 @@ const roleLabels: Record<string, string> = {
 };
 
 const sourceLabels: Record<string, string> = {
-  user: '单独设置',
-  department: '部门规则',
-  role: '角色规则',
-  role_default: '角色规则',
-  department_default: '部门默认规则',
+  user: '用户覆盖',
+  department: '部门覆盖',
+  role: '角色覆盖',
+  role_default: '角色默认',
+  department_default: '部门默认',
   system_default: '系统默认',
   none: '系统默认',
 };
 
 const modeSourceLabels: Record<MatrixMode, string> = {
-  user: '单独设置',
-  department: '部门规则',
-  role: '角色规则',
-  departmentDefault: '部门默认规则',
+  user: '用户覆盖',
+  department: '部门覆盖',
+  role: '角色覆盖',
+  departmentDefault: '部门默认',
 };
 
 const decisionLabels: Record<Decision | 'allow' | 'deny', string> = {
-  unset: '按规则',
+  unset: '跟随',
   allow: '允许',
   deny: '拒绝',
 };
@@ -203,6 +207,14 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
   const [changes, setChanges] = useState<Record<string, Decision>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [helpDismissed, setHelpDismissed] = useState(() =>
+    localStorage.getItem('perm_help_dismissed') === '1',
+  );
+
+  const dismissHelp = () => {
+    setHelpDismissed(true);
+    localStorage.setItem('perm_help_dismissed', '1');
+  };
 
   const changedCount = Object.keys(changes).length;
 
@@ -289,15 +301,22 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
         title: '产线',
         dataIndex: 'resource_name',
         key: 'resource_name',
-        width: 180,
+        width: 160,
         fixed: 'left',
-        render: (text: string) => <Text strong>{text}</Text>,
+        render: (text: string) => <Text strong style={{ fontSize: 13 }}>{text}</Text>,
       },
-      ...actionConfigs.map(({ key: action, label }) => ({
-        title: label,
+      ...actionConfigs.map(({ key: action, label, description, icon }) => ({
+        title: (
+          <Tooltip title={description} placement="top">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'help' }}>
+              {icon}
+              {label}
+            </span>
+          </Tooltip>
+        ),
         dataIndex: ['actions', action],
         key: action,
-        width: 180,
+        width: 170,
         render: (_: PermissionCell, row: PermissionMatrixLine) => {
           const cell = row.actions[action];
           const setting = getCellSetting(row, action, changes);
@@ -305,18 +324,38 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
           const changed = Boolean(changes[makeCellKey(row.resource_id, action)]);
 
           return (
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-              <Space size={6}>
-                <Tag
-                  color={visible.result === 'allow' ? 'green' : 'red'}
-                  style={{ borderRadius: 4, fontWeight: 600, fontSize: 12 }}
-                >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, position: 'relative' }}>
+              {/* 结果行：圆点 + 允许/拒绝 + 来源 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: visible.result === 'allow' ? '#52c41a' : '#ff4d4f',
+                    flexShrink: 0,
+                  }}
+                />
+                <Text style={{ fontSize: 12, fontWeight: 600, color: visible.result === 'allow' ? '#389e0d' : '#cf1322' }}>
                   {visible.label}
-                </Tag>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {visible.sourceLabel}
                 </Text>
-              </Space>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  · {visible.sourceLabel}
+                </Text>
+                {changed && (
+                  <div
+                    title="待保存"
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: '#1677ff',
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+              </div>
+              {/* 选择器行：紧凑 Segmented */}
               <Segmented
                 aria-label={`${row.resource_name}-${label}-设置`}
                 size="small"
@@ -325,13 +364,9 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
                 onChange={(value) =>
                   handleDecisionChange(row, action, value as Decision)
                 }
+                style={{ fontSize: 11 }}
               />
-              {changed ? (
-                <Text type="warning" style={{ fontSize: 12 }}>
-                  待保存
-                </Text>
-              ) : null}
-            </Space>
+            </div>
           );
         },
       })),
@@ -347,7 +382,7 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text type="secondary" style={{ fontSize: 13 }}>
-          每个单元格都可以设置为按规则、允许或拒绝。保存时只提交改动过的单元格。
+          选择 "跟随" 使用上层规则，"允许" 或 "拒绝" 强制覆盖下层。保存时只提交改动过的单元格。
         </Text>
         <Space size={10}>
           <Button
@@ -388,6 +423,22 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
           </Button>
         </Space>
       </div>
+      {!helpDismissed && (
+        <Alert
+          type="info"
+          showIcon
+          closable
+          onClose={dismissHelp}
+          message="权限优先级（从高到低）"
+          description={
+            <span>
+              用户覆盖 &gt; 部门覆盖 &gt; 角色覆盖 &gt; 角色默认 &gt; 部门默认 &gt; 系统默认<br />
+              设置为 "跟随" 时自动使用下一层级的规则；设置为 "允许" 或 "拒绝" 时强制覆盖所有下层规则。
+            </span>
+          }
+          style={{ borderRadius: 8 }}
+        />
+      )}
       <Table
         className="custom-table"
         columns={columns}
@@ -396,7 +447,7 @@ const MatrixEditor = ({ mode, targetId, emptyText }: MatrixEditorProps) => {
         loading={loading}
         pagination={false}
         size="middle"
-        scroll={{ x: 900 }}
+        scroll={{ x: 840 }}
       />
     </Space>
   );

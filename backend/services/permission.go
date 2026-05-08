@@ -102,6 +102,8 @@ func sourceLabel(source string) string {
 		return "部门规则"
 	case models.PermissionSubjectRole:
 		return "角色规则"
+	case "role_default":
+		return "角色默认"
 	case models.PermissionSubjectDepartmentDefault:
 		return "部门默认规则"
 	default:
@@ -144,6 +146,33 @@ func loadRuleMap(tx *gorm.DB, subjectType string, subjectID uint, subjectKey str
 		decision := rawDecision{Decision: rule.Decision, Source: rule.SubjectType, Rank: ruleScopeRank(rule, subjectID, subjectKey)}
 		if existing, ok := result[key]; !ok || decision.Rank > existing.Rank {
 			result[key] = decision
+		}
+	}
+	return result, nil
+}
+
+// loadRoleDefaultRules 加载角色全局默认权限（resource_id=0），并展开到每个产线。
+// role_default 规则存储时 resource_id=0 表示适用于所有产线。
+func loadRoleDefaultRules(tx *gorm.DB, roleID uint, lineIDs []uint) (map[string]rawDecision, error) {
+	result := map[string]rawDecision{}
+	if roleID == 0 {
+		return result, nil
+	}
+
+	var rules []models.PermissionRule
+	if err := tx.Where("subject_type = ? AND subject_id = ? AND subject_key = '' AND resource_type = ? AND resource_id = 0",
+		"role_default", roleID, models.PermissionResourceProductionLine).Find(&rules).Error; err != nil {
+		return nil, err
+	}
+
+	// 展开到每个产线
+	for _, rule := range rules {
+		for _, lineID := range lineIDs {
+			key := ruleKey(lineID, rule.Action)
+			decision := rawDecision{Decision: rule.Decision, Source: "role_default", Rank: 0}
+			if existing, ok := result[key]; !ok || decision.Rank > existing.Rank {
+				result[key] = decision
+			}
 		}
 	}
 	return result, nil
@@ -224,6 +253,8 @@ func linePermFromCells(lineID uint, cells map[string]PermissionCell) ResolvedLin
 			case models.PermissionSubjectDepartment:
 				resolved.Source = "department"
 			case models.PermissionSubjectRole:
+				resolved.Source = "role"
+			case "role_default":
 				resolved.Source = "role_default"
 			case models.PermissionSubjectDepartmentDefault:
 				resolved.Source = "department_default"
@@ -272,11 +303,17 @@ func ResolveUserProductionLinePermissions(user models.User, productionLines []mo
 		return nil, err
 	}
 
+	// 加载角色全局默认权限（resource_id=0），展开到每个产线
+	roleDefaultRules, err := loadRoleDefaultRules(database.DB, roleID, lineIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	resolved := make([]ResolvedLinePermission, 0, len(productionLines))
 	for _, line := range productionLines {
 		cells := map[string]PermissionCell{}
 		for _, action := range permissionActions {
-			cells[action] = resolveCell(action, line.ID, userRules, userRules, departmentRules, roleRules, departmentDefaultRules)
+			cells[action] = resolveCell(action, line.ID, userRules, userRules, departmentRules, roleRules, roleDefaultRules, departmentDefaultRules)
 		}
 		resolved = append(resolved, linePermFromCells(line.ID, cells))
 	}

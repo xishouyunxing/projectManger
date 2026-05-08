@@ -190,6 +190,9 @@ func DeleteRole(c *gin.Context) {
 	database.DB.Unscoped().
 		Where("subject_type = ? AND subject_id = ?", models.PermissionSubjectRole, roleID).
 		Delete(&models.PermissionRule{})
+	database.DB.Unscoped().
+		Where("subject_type = ? AND subject_id = ?", "role_default", roleID).
+		Delete(&models.PermissionRule{})
 
 	if err := database.DB.Delete(&role).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除角色失败"})

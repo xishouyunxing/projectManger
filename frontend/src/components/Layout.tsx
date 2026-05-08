@@ -46,7 +46,7 @@ const Layout = () => {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, isAdmin, hasPermission } = useAuth();
+  const { user, logout, isAdmin, isManager, hasPermission } = useAuth();
 
   // 全局快捷键 Ctrl+K
   useEffect(() => {
@@ -148,13 +148,20 @@ const Layout = () => {
     admin: '管理员',
     system_admin: '系统管理员',
     line_admin: '产线管理员',
+    offline_programmer: '离线编程人员',
+    field_operator: '现场操作员',
     engineer: '工程师',
     operator: '操作员',
     viewer: '查看者',
   };
 
   const menuItems = allMenuItems
-    .filter((item) => !item.permission || isAdmin || hasPermission(item.permission))
+    .filter((item) => {
+      if (!item.permission) return true;
+      if (isAdmin) return true;
+      if (isManager && (item.permission === 'page:production_lines' || item.permission === 'page:vehicle_models')) return true;
+      return hasPermission(item.permission);
+    })
     .map(({ permission: _permission, ...item }) => item);
 
   const userMenuItems: MenuProps['items'] = [

@@ -149,8 +149,10 @@ func backfillUserRoleIDs() error {
 
 	// 旧角色名 → 新角色名
 	legacyMap := map[string]string{
-		"admin": "system_admin",
-		"user":  "viewer",
+		"admin":    "system_admin",
+		"user":     "viewer",
+		"operator": "field_operator",
+		"engineer": "offline_programmer",
 	}
 
 	// 查询所有 role_id 为空的用户
