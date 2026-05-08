@@ -54,8 +54,10 @@
 
 - JWT Bearer Token 认证，受保护接口统一挂载在 `/api` 下。
 - 管理员接口使用额外中间件限制访问。
-- 用户权限、部门权限、角色默认权限、部门默认权限分层管理。
-- 权限矩阵支持“继承 / 显式覆盖 / 显式拒绝”三态语义。
+- 基于角色的访问控制（RBAC），内置系统管理员、产线管理员、离线编程人员、现场操作员四种角色。
+- 权限按用户 > 部门 > 角色 > 部门默认分层解析，支持”跟随 / 允许 / 拒绝”三态语义。
+- 前端页面按钮级权限控制，按角色自动隐藏无权操作。
+- 权限管理页支持按用户、部门、角色、部门默认四个维度配置权限矩阵。
 - CORS 来源通过配置白名单控制，不允许使用 `*`。
 
 ### 部署与运维
@@ -201,30 +203,44 @@ Vite 开发服务器会把 `/api` 代理到 `http://localhost:8080`。
 
 系统按生产线粒度控制权限，权限位包括：
 
-- `can_view`：查看
-- `can_download`：下载
-- `can_upload`：上传
-- `can_manage`：管理
+- `view`：查看程序列表
+- `download`：下载程序文件
+- `upload`：上传新版本
+- `manage`：编辑与删除
 
-有效权限按以下优先级解析：
+### 角色体系
+
+系统内置以下角色，权限由高到低：
+
+| 角色 | 标识 | 说明 |
+| --- | --- | --- |
+| 系统管理员 | `system_admin` | 全局管理权限，可管理用户、角色和系统配置 |
+| 产线管理员 | `line_admin` | 负责产线程序管理，可编辑/删除 |
+| 离线编程人员 | `offline_programmer` | 可上传、编辑程序，不可删除 |
+| 现场操作员 | `field_operator` | 仅查看和下载程序 |
+
+### 权限解析优先级
+
+有效权限按以下优先级从高到低解析：
 
 ```text
-用户显式权限
-  > 部门显式权限
-  > 角色默认权限
-  > 部门默认权限
-  > 无权限
+用户覆盖
+  > 部门覆盖
+  > 角色覆盖
+  > 角色默认
+  > 部门默认
+  > 系统默认（deny）
 ```
 
-用户和部门权限矩阵支持三态：
+权限矩阵支持三态：
 
 | 状态 | 含义 |
 | --- | --- |
-| 继承 | 当前层不保存显式配置，继续向下级默认权限回落 |
-| 显式允许 | 当前层保存权限位，优先于继承来源 |
-| 显式拒绝 | 当前层保存全 false 权限位，用于阻断继承权限 |
+| 跟随 | 当前层不设置，继续使用下一层级的规则 |
+| 允许 | 强制允许，覆盖所有下层规则 |
+| 拒绝 | 强制拒绝，阻断所有下层权限 |
 
-注意：全 false 的显式覆盖不是空配置。管理员在用户或部门矩阵中关闭所有权限并保存时，系统会保留该覆盖记录，用来明确拒绝访问。
+设置为"跟随"时，系统自动沿优先级链向下查找，直到找到明确的允许或拒绝，或回退到系统默认（deny）。
 
 ## API 概览
 
@@ -246,15 +262,16 @@ Authorization: Bearer <token>
 | --- | --- |
 | `/api/users` | 用户管理、修改密码、重置密码 |
 | `/api/departments` | 部门管理 |
+| `/api/roles` | 角色管理 |
 | `/api/production-lines` | 生产线与自定义字段管理 |
 | `/api/processes` | 工序管理 |
 | `/api/vehicle-models` | 车型管理 |
 | `/api/programs` | 程序管理、导出、批量导入、按车型查询 |
 | `/api/files` | 文件上传、下载、版本文件查询与删除 |
 | `/api/versions` | 程序版本管理与版本激活 |
-| `/api/permissions` | 用户权限、用户权限矩阵、有效权限查询 |
-| `/api/department-permissions` | 部门权限与部门权限矩阵 |
-| `/api/permission-defaults` | 角色默认权限与部门默认权限 |
+| `/api/permissions/users/:id` | 用户权限矩阵与有效权限查询 |
+| `/api/permissions/departments/:id` | 部门权限矩阵与规则 |
+| `/api/permissions/roles/:id` | 角色权限矩阵与规则 |
 | `/api/program-mappings` | 程序上下级映射关系 |
 | `/api/backup` | 数据库、文件、全量备份与恢复 |
 | `/api/migration` | 迁移状态、启动与回滚 |
@@ -341,10 +358,14 @@ projectManger/
 | --- | --- |
 | `User` | 系统登录账号与用户基础信息 |
 | `Department` | 部门信息 |
-| `UserPermission` | 用户对生产线的显式权限覆盖 |
-| `DepartmentPermission` | 部门对生产线的显式权限覆盖 |
-| `RoleDefaultPermission` | 角色默认权限 |
-| `DepartmentDefaultPermission` | 部门默认权限 |
+| `Role` | 角色定义，内置系统管理员、产线管理员、离线编程人员、现场操作员 |
+| `Permission` | 权限位定义（page 级功能权限） |
+| `RolePermission` | 角色与权限位的关联 |
+| `PermissionRule` | 统一权限规则，支持用户/部门/角色/部门默认四种主体类型 |
+| `UserPermission` | 用户对生产线的显式权限覆盖（遗留，已迁移至 PermissionRule） |
+| `DepartmentPermission` | 部门对生产线的显式权限覆盖（遗留，已迁移至 PermissionRule） |
+| `RoleDefaultPermission` | 角色默认权限（遗留，已迁移至 PermissionRule） |
+| `DepartmentDefaultPermission` | 部门默认权限（遗留，已迁移至 PermissionRule） |
 | `Process` | 工序 |
 | `ProductionLine` | 生产线 |
 | `ProductionLineCustomField` | 生产线自定义字段模板 |
@@ -360,8 +381,8 @@ projectManger/
 
 - 后端接口统一挂载在 `/api` 下。
 - 前端业务请求统一通过 `frontend/src/services/api.ts` 发起。
-- 用户与部门权限矩阵保存时只提交脏行，避免把继承权限固化为显式覆盖。
-- 用户/部门矩阵中的全 false 覆盖表示显式拒绝，不能按空配置删除。
+- 权限规则统一存储在 `PermissionRule` 表，按 `subject_type + subject_id + subject_key + resource_type + resource_id + action` 唯一约束。
+- 权限矩阵保存时只提交脏行，设置为"跟随"时删除规则记录，避免把继承结果固化为显式覆盖。
 - 生产环境建议关闭 `AUTO_MIGRATE`，改用受控迁移流程。
 - `uploads/`、`backups/`、`.perf-logs/` 等运行或测量产物不应提交到版本库。
 
@@ -407,7 +428,7 @@ npm run format:check
 
 ### 权限关闭后用户仍然可访问
 
-确认是在用户或部门权限矩阵中启用了“覆盖”后再关闭权限位。单纯继承状态下关闭显示值不会阻断角色默认或部门默认权限。
+确认在权限矩阵中将该单元格设置为”拒绝”而非”跟随”。”跟随”表示沿优先级链向下查找规则，不会阻断下层权限。
 
 ### Docker 启动后不能直接用于生产
 
