@@ -3,6 +3,8 @@ package controllers
 import (
 	"crane-system/models"
 	"crane-system/services"
+
+	"gorm.io/gorm"
 )
 
 type linePermissionBits struct {
@@ -17,8 +19,18 @@ func syncLinePermissionRules(subject services.PermissionSubject, bits linePermis
 	return services.SavePermissionRuleChanges(subject, permissionRuleChangesForLineBits(bits, false))
 }
 
+func syncLinePermissionRulesTx(tx *gorm.DB, subject services.PermissionSubject, bits linePermissionBits) error {
+	return services.SavePermissionRuleChangesTx(tx, subject, permissionRuleChangesForLineBits(bits, false))
+}
+
 func clearLinePermissionRules(subject services.PermissionSubject, lineID uint) error {
 	return services.SavePermissionRuleChanges(subject, permissionRuleChangesForLineBits(linePermissionBits{
+		ProductionLineID: lineID,
+	}, true))
+}
+
+func clearLinePermissionRulesTx(tx *gorm.DB, subject services.PermissionSubject, lineID uint) error {
+	return services.SavePermissionRuleChangesTx(tx, subject, permissionRuleChangesForLineBits(linePermissionBits{
 		ProductionLineID: lineID,
 	}, true))
 }

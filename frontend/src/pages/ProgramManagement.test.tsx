@@ -17,6 +17,9 @@ vi.mock('../services/api', () => ({
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     user: { id: 7, name: 'Current User' },
+    canEdit: true,
+    isAdmin: true,
+    isLineAdmin: false,
   }),
 }))
 

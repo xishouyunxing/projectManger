@@ -18,6 +18,14 @@ vi.mock('../services/api', async (importOriginal) => {
   }
 })
 
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    canEdit: true,
+    isAdmin: true,
+    isLineAdmin: false,
+  }),
+}))
+
 const mockApiGet = api.get as Mock
 const mockApiDelete = api.delete as Mock
 

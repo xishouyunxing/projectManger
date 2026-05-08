@@ -143,7 +143,11 @@ func loadRuleMap(tx *gorm.DB, subjectType string, subjectID uint, subjectKey str
 	}
 	for _, rule := range rules {
 		key := ruleKey(rule.ResourceID, rule.Action)
-		decision := rawDecision{Decision: rule.Decision, Source: rule.SubjectType, Rank: ruleScopeRank(rule, subjectID, subjectKey)}
+		source := rule.SubjectType
+		if subjectType == models.PermissionSubjectRole && rule.SubjectID == 0 && strings.TrimSpace(rule.SubjectKey) != "" {
+			source = "role_default"
+		}
+		decision := rawDecision{Decision: rule.Decision, Source: source, Rank: ruleScopeRank(rule, subjectID, subjectKey)}
 		if existing, ok := result[key]; !ok || decision.Rank > existing.Rank {
 			result[key] = decision
 		}
@@ -375,43 +379,50 @@ func normalizeSubject(subject PermissionSubject) PermissionSubject {
 	return subject
 }
 
-func SavePermissionRuleChanges(subject PermissionSubject, changes []PermissionRuleChange) error {
+func SavePermissionRuleChangesTx(tx *gorm.DB, subject PermissionSubject, changes []PermissionRuleChange) error {
+	if tx == nil {
+		return errors.New("nil transaction")
+	}
 	subject = normalizeSubject(subject)
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, change := range changes {
-			resourceType := strings.TrimSpace(change.ResourceType)
-			if resourceType == "" {
-				resourceType = models.PermissionResourceProductionLine
-			}
-			if resourceType != models.PermissionResourceProductionLine {
-				return errors.New("invalid resource type")
-			}
-			if change.ResourceID == 0 {
-				return errors.New("invalid resource id")
-			}
-			if !actionValid(change.Action) {
-				return errors.New("invalid action")
-			}
-			decision := strings.TrimSpace(change.Decision)
-			where := permissionRuleScopeQuery(tx, subject, resourceType, change.ResourceID, change.Action)
-			if decision == "unset" || decision == "" {
-				if err := where.Unscoped().Delete(&models.PermissionRule{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if decision != models.PermissionDecisionAllow && decision != models.PermissionDecisionDeny {
-				return errors.New("invalid decision")
-			}
+	for _, change := range changes {
+		resourceType := strings.TrimSpace(change.ResourceType)
+		if resourceType == "" {
+			resourceType = models.PermissionResourceProductionLine
+		}
+		if resourceType != models.PermissionResourceProductionLine {
+			return errors.New("invalid resource type")
+		}
+		if change.ResourceID == 0 {
+			return errors.New("invalid resource id")
+		}
+		if !actionValid(change.Action) {
+			return errors.New("invalid action")
+		}
+		decision := strings.TrimSpace(change.Decision)
+		where := permissionRuleScopeQuery(tx, subject, resourceType, change.ResourceID, change.Action)
+		if decision == "unset" || decision == "" {
 			if err := where.Unscoped().Delete(&models.PermissionRule{}).Error; err != nil {
 				return err
 			}
-			rule := models.PermissionRule{SubjectType: subject.Type, SubjectID: subject.ID, SubjectKey: subject.Key, ResourceType: resourceType, ResourceID: change.ResourceID, Action: change.Action, Decision: decision}
-			if err := tx.Create(&rule).Error; err != nil {
-				return err
-			}
+			continue
 		}
-		return nil
+		if decision != models.PermissionDecisionAllow && decision != models.PermissionDecisionDeny {
+			return errors.New("invalid decision")
+		}
+		if err := where.Unscoped().Delete(&models.PermissionRule{}).Error; err != nil {
+			return err
+		}
+		rule := models.PermissionRule{SubjectType: subject.Type, SubjectID: subject.ID, SubjectKey: subject.Key, ResourceType: resourceType, ResourceID: change.ResourceID, Action: change.Action, Decision: decision}
+		if err := tx.Create(&rule).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SavePermissionRuleChanges(subject PermissionSubject, changes []PermissionRuleChange) error {
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		return SavePermissionRuleChangesTx(tx, subject, changes)
 	}); err != nil {
 		return err
 	}

@@ -152,19 +152,19 @@ func SetupRouter() *gin.Engine {
 
 		roles := protected.Group("/roles")
 		{
-			roles.GET("", controllers.GetRoles)
-			roles.GET("/:id", controllers.GetRole)
+			roles.GET("", middleware.RequirePermission("page:permissions"), controllers.GetRoles)
+			roles.GET("/:id", middleware.RequirePermission("page:permissions"), controllers.GetRole)
 			roles.POST("", middleware.RequirePermission("page:permissions"), controllers.CreateRole)
 			roles.PUT("/:id", middleware.RequirePermission("page:permissions"), controllers.UpdateRole)
 			roles.DELETE("/:id", middleware.RequirePermission("page:permissions"), controllers.DeleteRole)
-			roles.GET("/:id/permissions", controllers.GetRoleLinePermissions)
+			roles.GET("/:id/permissions", middleware.RequirePermission("page:permissions"), controllers.GetRoleLinePermissions)
 			roles.PUT("/:id/permissions", middleware.RequirePermission("page:permissions"), controllers.SaveRoleLinePermissions)
 			roles.PUT("/:id/function-permissions", middleware.RequirePermission("page:permissions"), controllers.SaveRolePermissions)
 		}
 
 		permissionDefs := protected.Group("/permission-definitions")
 		{
-			permissionDefs.GET("", controllers.GetAllPermissions)
+			permissionDefs.GET("", middleware.RequirePermission("page:permissions"), controllers.GetAllPermissions)
 		}
 
 		lineAdmin := protected.Group("/line-admin")

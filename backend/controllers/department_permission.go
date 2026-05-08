@@ -48,57 +48,56 @@ func CreateDepartmentPermission(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed"})
 		return
 	}
+
+	status := http.StatusCreated
 	if err == nil {
-		existing.CanView = permission.CanView
-		existing.CanDownload = permission.CanDownload
-		existing.CanUpload = permission.CanUpload
-		existing.CanManage = permission.CanManage
-		if err := database.DB.Save(&existing).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新权限失败"})
-			return
-		}
-		if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: existing.DepartmentID}, linePermissionBits{
-			ProductionLineID: existing.ProductionLineID,
-			CanView:          existing.CanView,
-			CanDownload:      existing.CanDownload,
-			CanUpload:        existing.CanUpload,
-			CanManage:        existing.CanManage,
-		}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
-			return
-		}
-		c.JSON(http.StatusOK, existing)
-		return
+		status = http.StatusOK
+		permission.ID = existing.ID
 	}
 
-	if err := database.DB.Model(&models.DepartmentPermission{}).Create(map[string]any{
-		"department_id":      permission.DepartmentID,
-		"production_line_id": permission.ProductionLineID,
-		"can_view":           permission.CanView,
-		"can_download":       permission.CanDownload,
-		"can_upload":         permission.CanUpload,
-		"can_manage":         permission.CanManage,
-	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建权限失败"})
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if status == http.StatusOK {
+			existing.CanView = permission.CanView
+			existing.CanDownload = permission.CanDownload
+			existing.CanUpload = permission.CanUpload
+			existing.CanManage = permission.CanManage
+			if err := tx.Save(&existing).Error; err != nil {
+				return err
+			}
+			permission = existing
+		} else if err := tx.Model(&models.DepartmentPermission{}).Create(map[string]any{
+			"department_id":      permission.DepartmentID,
+			"production_line_id": permission.ProductionLineID,
+			"can_view":           permission.CanView,
+			"can_download":       permission.CanDownload,
+			"can_upload":         permission.CanUpload,
+			"can_manage":         permission.CanManage,
+		}).Error; err != nil {
+			return err
+		}
+
+		return syncLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
+			ProductionLineID: permission.ProductionLineID,
+			CanView:          permission.CanView,
+			CanDownload:      permission.CanDownload,
+			CanUpload:        permission.CanUpload,
+			CanManage:        permission.CanManage,
+		})
+	}); err != nil {
+		if status == http.StatusOK {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新权限失败"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建权限失败"})
+		}
 		return
 	}
+	services.InvalidateAllCache()
 
 	if err := database.DB.Preload("Department").Preload("ProductionLine").Where("department_id = ? AND production_line_id = ?", permission.DepartmentID, permission.ProductionLineID).First(&permission).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
 		return
 	}
-	if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
-		ProductionLineID: permission.ProductionLineID,
-		CanView:          permission.CanView,
-		CanDownload:      permission.CanDownload,
-		CanUpload:        permission.CanUpload,
-		CanManage:        permission.CanManage,
-	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, permission)
+	c.JSON(status, permission)
 }
 
 func validateDepartmentPermissionRelations(departmentID, productionLineID uint) error {
@@ -173,22 +172,27 @@ func UpdateDepartmentPermission(c *gin.Context) {
 		return
 	}
 
-	if err := database.DB.Model(&permission).Updates(updates).Error; err != nil {
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&permission).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&permission, permissionID).Error; err != nil {
+			return err
+		}
+		return syncLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
+			ProductionLineID: permission.ProductionLineID,
+			CanView:          permission.CanView,
+			CanDownload:      permission.CanDownload,
+			CanUpload:        permission.CanUpload,
+			CanManage:        permission.CanManage,
+		})
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+	services.InvalidateAllCache()
 	if err := database.DB.Preload("Department").Preload("ProductionLine").First(&permission, permissionID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
-		return
-	}
-	if err := syncLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, linePermissionBits{
-		ProductionLineID: permission.ProductionLineID,
-		CanView:          permission.CanView,
-		CanDownload:      permission.CanDownload,
-		CanUpload:        permission.CanUpload,
-		CanManage:        permission.CanManage,
-	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
 		return
 	}
 
@@ -208,19 +212,26 @@ func DeleteDepartmentPermission(c *gin.Context) {
 		return
 	}
 
-	result := database.DB.Unscoped().Delete(&models.DepartmentPermission{}, permissionID)
-	if result.Error != nil {
+	rowsAffected := int64(0)
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Unscoped().Delete(&models.DepartmentPermission{}, permissionID)
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		if rowsAffected == 0 {
+			return nil
+		}
+		return clearLinePermissionRulesTx(tx, services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, permission.ProductionLineID)
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "权限不存在"})
 		return
 	}
-	if err := clearLinePermissionRules(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: permission.DepartmentID}, permission.ProductionLineID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "同步权限规则失败"})
-		return
-	}
+	services.InvalidateAllCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }

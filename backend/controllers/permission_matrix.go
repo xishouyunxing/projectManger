@@ -133,18 +133,16 @@ func SaveUserPermissionMatrix(c *gin.Context) {
 				return err
 			}
 		}
-		return nil
+		return services.SavePermissionRuleChangesTx(
+			tx,
+			services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID},
+			permissionRuleChangesFromMatrixItems(req.Permissions, false),
+		)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
-	if err := services.SavePermissionRuleChanges(
-		services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID},
-		permissionRuleChangesFromMatrixItems(req.Permissions, false),
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
-		return
-	}
+	services.InvalidateAllCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
@@ -227,18 +225,16 @@ func SaveDepartmentPermissionMatrix(c *gin.Context) {
 				return err
 			}
 		}
-		return nil
+		return services.SavePermissionRuleChangesTx(
+			tx,
+			services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID},
+			permissionRuleChangesFromMatrixItems(req.Permissions, false),
+		)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
-	if err := services.SavePermissionRuleChanges(
-		services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID},
-		permissionRuleChangesFromMatrixItems(req.Permissions, false),
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
-		return
-	}
+	services.InvalidateAllCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
@@ -319,18 +315,16 @@ func SaveRoleDefaultPermissionMatrix(c *gin.Context) {
 				return err
 			}
 		}
-		return nil
+		return services.SavePermissionRuleChangesTx(
+			tx,
+			services.PermissionSubject{Type: models.PermissionSubjectRole, Key: role},
+			permissionRuleChangesFromMatrixItems(req.Permissions, true),
+		)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
-	if err := services.SavePermissionRuleChanges(
-		services.PermissionSubject{Type: models.PermissionSubjectRole, Key: role},
-		permissionRuleChangesFromMatrixItems(req.Permissions, true),
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
-		return
-	}
+	services.InvalidateAllCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
@@ -419,18 +413,16 @@ func SaveDepartmentDefaultPermissionMatrix(c *gin.Context) {
 				return err
 			}
 		}
-		return nil
+		return services.SavePermissionRuleChangesTx(
+			tx,
+			services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: departmentID},
+			permissionRuleChangesFromMatrixItems(req.Permissions, true),
+		)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return
 	}
-	if err := services.SavePermissionRuleChanges(
-		services.PermissionSubject{Type: models.PermissionSubjectDepartmentDefault, ID: departmentID},
-		permissionRuleChangesFromMatrixItems(req.Permissions, true),
-	); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
-		return
-	}
+	services.InvalidateAllCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }

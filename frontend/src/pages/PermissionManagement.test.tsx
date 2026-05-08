@@ -128,12 +128,12 @@ describe('PermissionManagement', () => {
   it('renders the four permission rule tabs without technical wording', async () => {
     renderPage();
 
-    expect(await screen.findByText('权限管理')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '权限管理' })).toBeTruthy();
     expect(screen.getByText('用户权限')).toBeTruthy();
     expect(screen.getByText('部门规则')).toBeTruthy();
     expect(screen.getByText('角色规则')).toBeTruthy();
     expect(screen.getByText('部门默认规则')).toBeTruthy();
-    expect(screen.queryByText(/继承|覆盖|allow|deny|unset|policy/)).toBeNull();
+    expect(screen.queryByText(/继承|allow|deny|unset|policy/)).toBeNull();
   });
 
   it('loads the user permission matrix from the rule API', async () => {
@@ -145,14 +145,14 @@ describe('PermissionManagement', () => {
       );
     });
     expect(await screen.findByText('总装线')).toBeTruthy();
-    expect(screen.getAllByText('按规则').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('部门规则').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('跟随').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/部门覆盖/).length).toBeGreaterThan(0);
   });
 
   it('submits only the changed cell when setting one permission to refuse', async () => {
     renderPage();
 
-    const selector = await screen.findByLabelText('总装线-查看-设置');
+    const selector = await screen.findByLabelText('总装线-查看程序列表-设置');
     fireEvent.click(within(selector).getByText('拒绝'));
     fireEvent.click(screen.getByRole('button', { name: /保存 1 项/ }));
 
@@ -173,8 +173,8 @@ describe('PermissionManagement', () => {
   it('submits unset when changing a separate setting back to rule based mode', async () => {
     renderPage();
 
-    const selector = await screen.findByLabelText('总装线-下载-设置');
-    fireEvent.click(within(selector).getByText('按规则'));
+    const selector = await screen.findByLabelText('总装线-下载程序文件-设置');
+    fireEvent.click(within(selector).getByText('跟随'));
     fireEvent.click(screen.getByRole('button', { name: /保存 1 项/ }));
 
     await waitFor(() => {
@@ -234,6 +234,6 @@ describe('PermissionManagement', () => {
     });
     fireEvent.click(within(selector).getByText('\u5141\u8bb8'));
 
-    expect(screen.getAllByText('\u89d2\u8272\u89c4\u5219').length).toBeGreaterThan(1);
+    expect(screen.getAllByText(/\u89d2\u8272\u8986\u76d6/).length).toBeGreaterThan(0);
   });
 });

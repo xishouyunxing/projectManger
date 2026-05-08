@@ -297,6 +297,61 @@ func TestUpdateUserDoesNotAllowSelfServiceDepartmentEscalation(t *testing.T) {
 	}
 }
 
+func TestUpdateUserAllowsSystemAdminToUpdateOtherUsers(t *testing.T) {
+	database.DB = openProductionLineCustomFieldTestDB(t)
+	r := setupUpdateUserTestRouter()
+
+	department := models.Department{Name: "System Admin Dept", Status: "active"}
+	if err := database.DB.Create(&department).Error; err != nil {
+		t.Fatalf("create department: %v", err)
+	}
+
+	systemAdmin := models.User{
+		Name:       "System Admin",
+		EmployeeID: "EMP-SYS-ADMIN",
+		Role:       "system_admin",
+		Password:   createHashedPasswordForTest(t, "system-admin-old"),
+		Status:     "active",
+	}
+	targetUser := models.User{
+		Name:       "Target",
+		EmployeeID: "EMP-SYS-TARGET",
+		Role:       "user",
+		Password:   createHashedPasswordForTest(t, "target-old"),
+		Status:     "active",
+	}
+	if err := database.DB.Create(&systemAdmin).Error; err != nil {
+		t.Fatalf("create system admin: %v", err)
+	}
+	if err := database.DB.Create(&targetUser).Error; err != nil {
+		t.Fatalf("create target user: %v", err)
+	}
+
+	systemAdminToken := createUserTokenForTest(t, systemAdmin.ID, "system_admin")
+	resp := performUpdateUserRequest(t, r, systemAdminToken, targetUser.ID, map[string]any{
+		"role":          "line_admin",
+		"status":        "inactive",
+		"department_id": department.ID,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for system_admin update, got %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var reloaded models.User
+	if err := database.DB.First(&reloaded, targetUser.ID).Error; err != nil {
+		t.Fatalf("reload target user: %v", err)
+	}
+	if reloaded.Role != "line_admin" {
+		t.Fatalf("expected system_admin role update to persist, got %q", reloaded.Role)
+	}
+	if reloaded.Status != "inactive" {
+		t.Fatalf("expected system_admin status update to persist, got %q", reloaded.Status)
+	}
+	if reloaded.DepartmentID == nil || *reloaded.DepartmentID != department.ID {
+		t.Fatalf("expected system_admin department update to persist as %d, got %#v", department.ID, reloaded.DepartmentID)
+	}
+}
+
 func TestCreateUserValidatesRoleStatusAndDepartment(t *testing.T) {
 	database.DB = openProductionLineCustomFieldTestDB(t)
 	r := setupUpdateUserTestRouter()

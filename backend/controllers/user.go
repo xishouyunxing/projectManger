@@ -237,8 +237,10 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	userID, _ := c.Get("user_id")
-	userRole, _ := c.Get("user_role")
-	if userRole != "admin" && userID != user.ID {
+	userRoleValue, _ := c.Get("user_role")
+	userRole, _ := userRoleValue.(string)
+	isAdmin := isSystemAdminRole(userRole)
+	if !isAdmin && userID != user.ID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "?????"})
 		return
 	}
@@ -249,7 +251,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	updates, err := buildUserUpdates(payload, userRole == "admin")
+	updates, err := buildUserUpdates(payload, isAdmin)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
