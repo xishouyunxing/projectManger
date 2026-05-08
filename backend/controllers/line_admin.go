@@ -11,33 +11,16 @@ import (
 	"gorm.io/gorm"
 )
 
-func isSystemAdminRole(role string) bool {
-	return role == "admin" || role == "system_admin"
-}
-
 func authorizeLineAdminScope(c *gin.Context, productionLineID uint) bool {
-	roleValue, _ := c.Get("user_role")
-	role, _ := roleValue.(string)
-	if isSystemAdminRole(role) {
-		return true
-	}
-
-	userID := c.GetUint("user_id")
-	if role == "line_admin" && services.IsLineManager(userID, productionLineID) {
-		return true
-	}
-
-	c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该产线"})
-	return false
+	return writeAuthDecision(c, services.AuthorizeLineAdminScope(currentUserID(c), currentUserRole(c), productionLineID))
 }
 
 func GetLineAdminAssignments(c *gin.Context) {
-	roleValue, _ := c.Get("user_role")
-	role, _ := roleValue.(string)
-	userID := c.GetUint("user_id")
+	role := currentUserRole(c)
+	userID := currentUserID(c)
 
 	query := database.DB.Preload("User").Preload("User.Department").Preload("ProductionLine")
-	if !isSystemAdminRole(role) {
+	if !services.IsSystemAdminRole(role) {
 		if role != "line_admin" {
 			c.JSON(http.StatusForbidden, gin.H{"error": "无权查看产线管理员分配"})
 			return
@@ -72,9 +55,8 @@ func GetLineAdminAssignments(c *gin.Context) {
 }
 
 func CreateLineAdminAssignment(c *gin.Context) {
-	currentRoleValue, _ := c.Get("user_role")
-	currentRole, _ := currentRoleValue.(string)
-	currentUserID := c.GetUint("user_id")
+	currentRole := currentUserRole(c)
+	currentUserID := currentUserID(c)
 
 	var req struct {
 		UserID           uint `json:"user_id" binding:"required"`
@@ -85,8 +67,7 @@ func CreateLineAdminAssignment(c *gin.Context) {
 		return
 	}
 
-	if currentRole == "line_admin" && !services.IsLineManager(currentUserID, req.ProductionLineID) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该产线"})
+	if !writeAuthDecision(c, services.AuthorizeLineAdminScope(currentUserID, currentRole, req.ProductionLineID)) {
 		return
 	}
 
@@ -122,9 +103,8 @@ func DeleteLineAdminAssignment(c *gin.Context) {
 		return
 	}
 
-	currentRoleValue, _ := c.Get("user_role")
-	currentRole, _ := currentRoleValue.(string)
-	currentUserID := c.GetUint("user_id")
+	currentRole := currentUserRole(c)
+	currentUserID := currentUserID(c)
 
 	var assignment models.LineAdminAssignment
 	if err := database.DB.First(&assignment, assignmentID).Error; err != nil {
@@ -132,8 +112,7 @@ func DeleteLineAdminAssignment(c *gin.Context) {
 		return
 	}
 
-	if currentRole == "line_admin" && !services.IsLineManager(currentUserID, assignment.ProductionLineID) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作该产线"})
+	if !writeAuthDecision(c, services.AuthorizeLineAdminScope(currentUserID, currentRole, assignment.ProductionLineID)) {
 		return
 	}
 
@@ -223,8 +202,7 @@ func SaveLinePermissionByAdmin(c *gin.Context) {
 		return
 	}
 
-	roleValue, _ := c.Get("user_role")
-	currentRole, _ := roleValue.(string)
+	currentRole := currentUserRole(c)
 
 	var req struct {
 		UserID      uint  `json:"user_id" binding:"required"`

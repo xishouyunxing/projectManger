@@ -4,6 +4,7 @@ import (
 	"crane-system/config"
 	"crane-system/database"
 	"crane-system/models"
+	"crane-system/services"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -239,7 +240,7 @@ func UpdateUser(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	userRoleValue, _ := c.Get("user_role")
 	userRole, _ := userRoleValue.(string)
-	isAdmin := isSystemAdminRole(userRole)
+	isAdmin := services.IsSystemAdminRole(userRole)
 	if !isAdmin && userID != user.ID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "?????"})
 		return

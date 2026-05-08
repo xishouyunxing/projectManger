@@ -9,13 +9,13 @@ import (
 	"gorm.io/gorm"
 )
 
-type linePermissionAction string
+type linePermissionAction = services.LineAction
 
 const (
-	lineActionView     linePermissionAction = "view"
-	lineActionDownload linePermissionAction = "download"
-	lineActionUpload   linePermissionAction = "upload"
-	lineActionManage   linePermissionAction = "manage"
+	lineActionView     linePermissionAction = services.LineActionView
+	lineActionDownload linePermissionAction = services.LineActionDownload
+	lineActionUpload   linePermissionAction = services.LineActionUpload
+	lineActionManage   linePermissionAction = services.LineActionManage
 )
 
 type resolvedLinePermission struct {
@@ -29,28 +29,7 @@ type resolvedLinePermission struct {
 
 // authorizeOwnerOrAdmin 用于"本人可访问、管理员可访问"的账号级接口。
 func authorizeOwnerOrAdmin(c *gin.Context, targetUserID uint) bool {
-	roleValue, roleExists := c.Get("user_role")
-	if roleExists {
-		if role, ok := roleValue.(string); ok && (role == "admin" || role == "system_admin") {
-			return true
-		}
-	}
-
-	userIDValue, userIDExists := c.Get("user_id")
-	if !userIDExists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
-		return false
-	}
-	userID, ok := userIDValue.(uint)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户ID无效"})
-		return false
-	}
-	if userID != targetUserID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "无权操作"})
-		return false
-	}
-	return true
+	return writeAuthDecision(c, services.AuthorizeOwnerOrAdmin(currentUserID(c), currentUserRole(c), targetUserID))
 }
 
 // authorizeProgramAction 将程序级操作转换为产线权限判断。
@@ -71,92 +50,22 @@ func authorizeProgramAction(c *gin.Context, tx *gorm.DB, programID uint, action 
 // checkLineAction 返回可直接用于接口响应的授权结果。
 // system_admin 硬编码绕过；line_admin 对负责产线全权；普通用户按用户覆盖→角色权限解析。
 func checkLineAction(c *gin.Context, productionLineID uint, action linePermissionAction) (bool, int, string) {
-	roleValue, _ := c.Get("user_role")
-	role, _ := roleValue.(string)
-
-	// system_admin 硬编码绕过
-	if role == "admin" || role == "system_admin" {
-		return true, 0, ""
-	}
-
-	userIDValue, userIDExists := c.Get("user_id")
-	if !userIDExists {
-		return false, http.StatusUnauthorized, "未认证"
-	}
-	userID, ok := userIDValue.(uint)
-	if !ok {
-		return false, http.StatusUnauthorized, "用户ID无效"
-	}
-
-	// line_admin 对负责的产线有管理权
-	if role == "line_admin" && services.IsLineManager(userID, productionLineID) {
-		return true, 0, ""
-	}
-
-	// 使用缓存权限服务解析：用户覆盖 → 角色产线权限
-	allowed := services.UserHasLinePermission(userID, productionLineID, string(action))
-	if !allowed {
-		return false, http.StatusForbidden, "无权操作"
-	}
-
-	return true, 0, ""
+	decision := services.CheckLineAction(currentUserID(c), currentUserRole(c), productionLineID, action)
+	return decision.Allowed, decision.StatusCode, decision.Message
 }
 
 // resolveAuthorizedLineIDs 返回当前用户可访问的产线集合。
 // 管理员返回 nil 表示不需要追加产线过滤条件。
 func resolveAuthorizedLineIDs(c *gin.Context, action linePermissionAction) (map[uint]struct{}, int, string) {
-	roleValue, _ := c.Get("user_role")
-	role, _ := roleValue.(string)
-
-	// admin 不需要过滤
-	if role == "admin" || role == "system_admin" {
-		return nil, 0, ""
+	allowedLineIDs, decision := services.ResolveAuthorizedLineIDs(currentUserID(c), currentUserRole(c), action)
+	if !decision.Allowed {
+		return nil, decision.StatusCode, decision.Message
 	}
-
-	userIDValue, userIDExists := c.Get("user_id")
-	if !userIDExists {
-		return nil, http.StatusUnauthorized, "未认证"
-	}
-	userID, ok := userIDValue.(uint)
-	if !ok {
-		return nil, http.StatusUnauthorized, "用户ID无效"
-	}
-
-	perms, err := services.GetUserPermissions(userID)
-	if err != nil {
-		return nil, http.StatusInternalServerError, "查询权限失败"
-	}
-
-	allowedLineIDs := map[uint]struct{}{}
-	for lineID, lp := range perms.LinePermissions {
-		if permissionAllowsAction(lp.CanView, lp.CanDownload, lp.CanUpload, lp.CanManage, action) {
-			allowedLineIDs[lineID] = struct{}{}
-		}
-	}
-
-	// line_admin 对负责的产线也有权限
-	if role == "line_admin" {
-		for _, managedID := range perms.ManagedLineIDs {
-			allowedLineIDs[managedID] = struct{}{}
-		}
-	}
-
 	return allowedLineIDs, 0, ""
 }
 
 func permissionAllowsAction(canView, canDownload, canUpload, canManage bool, action linePermissionAction) bool {
-	switch action {
-	case lineActionView:
-		return canView || canManage
-	case lineActionDownload:
-		return canDownload || canManage
-	case lineActionUpload:
-		return canUpload || canManage
-	case lineActionManage:
-		return canManage
-	default:
-		return false
-	}
+	return services.LinePermissionAllowsAction(canView, canDownload, canUpload, canManage, action)
 }
 
 func lineIDAllowed(allowedLineIDs map[uint]struct{}, lineID uint) bool {
@@ -174,6 +83,24 @@ func authorizeLineAction(c *gin.Context, productionLineID uint, action linePermi
 		return false
 	}
 	return true
+}
+
+func currentUserRole(c *gin.Context) string {
+	roleValue, _ := c.Get("user_role")
+	role, _ := roleValue.(string)
+	return role
+}
+
+func currentUserID(c *gin.Context) uint {
+	return c.GetUint("user_id")
+}
+
+func writeAuthDecision(c *gin.Context, decision services.AuthDecision) bool {
+	if decision.Allowed {
+		return true
+	}
+	c.JSON(decision.StatusCode, gin.H{"error": decision.Message})
+	return false
 }
 
 // resolveUserLinePermission 供测试使用的单产线权限解析。
