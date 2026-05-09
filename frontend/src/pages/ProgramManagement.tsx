@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TablePaginationConfig } from 'antd/es/table';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -61,15 +61,13 @@ import {
   parseCustomFieldOptions,
 } from './program-management/utils';
 import { programApi } from './program-management/programApi';
+import { useProgramBatchImport } from './program-management/useProgramBatchImport';
+import { useProgramDownloads } from './program-management/useProgramDownloads';
+import { useProgramRelations } from './program-management/useProgramRelations';
 import type {
-  BatchImportPreview,
-  BatchImportStatus,
   Program,
   ProgramCustomFieldDefinition,
   ProgramFormValues,
-  ProgramMapping,
-  WorkstationInfo,
-  WorkstationMapping,
 } from './program-management/types';
 
 const { Title, Text } = Typography;
@@ -107,7 +105,8 @@ const ProgramManagement = () => {
     null,
   );
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
-  const [searchInputValue, setSearchInputValue] = useState(initialSearchKeyword);
+  const [searchInputValue, setSearchInputValue] =
+    useState(initialSearchKeyword);
   const [searchKeyword, setSearchKeyword] = useState(initialSearchKeyword);
   const [filterDateRange, setFilterDateRange] = useState<
     [string | null, string | null]
@@ -155,24 +154,32 @@ const ProgramManagement = () => {
   });
 
   // 关联管理相关状态
-  const [relationDrawerVisible, setRelationDrawerVisible] = useState(false);
-  const [relatedPrograms, setRelatedPrograms] = useState<ProgramMapping[]>([]);
-  const [addRelationModalVisible, setAddRelationModalVisible] = useState(false);
-  const [relationForm] = Form.useForm();
-  const [mappingSearchKeyword, setMappingSearchKeyword] = useState('');
-  const [debouncedMappingSearchKeyword, setDebouncedMappingSearchKeyword] =
-    useState('');
-  const [mappingFilterProductionLine, setMappingFilterProductionLine] =
-    useState<number | null>(null);
-  const [mappingFilterVehicleModel, setMappingFilterVehicleModel] = useState<
-    number | null
-  >(null);
-  const [mappingFilterStatus, setMappingFilterStatus] = useState<string | null>(
-    null,
-  );
-  const [mappingCandidatePrograms, setMappingCandidatePrograms] = useState<
-    Program[]
-  >([]);
+  const {
+    relationDrawerVisible,
+    setRelationDrawerVisible,
+    relatedPrograms,
+    addRelationModalVisible,
+    setAddRelationModalVisible,
+    relationForm,
+    mappingSearchKeyword,
+    setMappingSearchKeyword,
+    mappingFilterProductionLine,
+    setMappingFilterProductionLine,
+    mappingFilterVehicleModel,
+    setMappingFilterVehicleModel,
+    mappingFilterStatus,
+    setMappingFilterStatus,
+    availableMappingCandidatePrograms,
+    handleViewRelations,
+    handleAddRelation,
+    handleDeleteRelation,
+    closeAddRelationModal,
+  } = useProgramRelations({
+    currentProgram,
+    setCurrentProgram,
+    setModalLoading,
+    loadData,
+  });
 
   const filteredPrograms = sortedPrograms;
 
@@ -193,21 +200,6 @@ const ProgramManagement = () => {
     setProgramPage(1);
     setSearchKeyword(searchInputValue.trim());
   };
-
-  const relatedProgramIds = useMemo(
-    () => new Set(relatedPrograms.map((rp) => rp.child_program.id)),
-    [relatedPrograms],
-  );
-
-  // 映射候选需要排除当前程序、已作为子程序映射的程序，以及本父程序已关联的子程序。
-  const availableMappingCandidatePrograms = useMemo(
-    () =>
-      mappingCandidatePrograms
-        .filter((p) => p.id !== currentProgram?.id)
-        .filter((p) => !p.mapping_info)
-        .filter((p) => !relatedProgramIds.has(p.id)),
-    [currentProgram?.id, mappingCandidatePrograms, relatedProgramIds],
-  );
 
   const handleFilterProductionLineChange = async (value?: number) => {
     const nextValue = value ?? null;
@@ -255,62 +247,6 @@ const ProgramManagement = () => {
       window.clearTimeout(timeoutId);
     };
   }, [searchInputValue]);
-
-  useEffect(() => {
-    // 映射候选搜索单独防抖，避免弹窗中每个按键都触发候选查询。
-    const timeoutId = window.setTimeout(() => {
-      setDebouncedMappingSearchKeyword(mappingSearchKeyword.trim());
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [mappingSearchKeyword]);
-
-  useEffect(() => {
-    if (!addRelationModalVisible || !currentProgram) {
-      setMappingCandidatePrograms([]);
-      return;
-    }
-
-    let cancelled = false;
-    const loadMappingCandidates = async () => {
-      try {
-        // 候选列表只取前 50 条，后续如需大规模选择应改成服务端分页选择器。
-        const candidates = await programApi.listMappingCandidates({
-          page: 1,
-          page_size: 50,
-          keyword: debouncedMappingSearchKeyword || undefined,
-          production_line_id: mappingFilterProductionLine || undefined,
-          vehicle_model_id: mappingFilterVehicleModel || undefined,
-          status: mappingFilterStatus || undefined,
-        });
-        if (cancelled) {
-          return;
-        }
-
-        setMappingCandidatePrograms(candidates);
-      } catch (error) {
-        if (!cancelled) {
-          console.error('Failed to load mapping candidates:', error);
-          setMappingCandidatePrograms([]);
-        }
-      }
-    };
-
-    void loadMappingCandidates();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    addRelationModalVisible,
-    currentProgram,
-    debouncedMappingSearchKeyword,
-    mappingFilterProductionLine,
-    mappingFilterVehicleModel,
-    mappingFilterStatus,
-  ]);
 
   const handleModalProductionLineChange = async (
     productionLineId: number,
@@ -384,83 +320,23 @@ const ProgramManagement = () => {
     }
   };
 
-  const handleViewRelations = async (record: Program) => {
-    setCurrentProgram(record);
-    setModalLoading(true);
-    try {
-      const mappings = await programApi.listProgramMappings(record.id);
-      setRelatedPrograms(mappings);
-      setRelationDrawerVisible(true);
-    } catch (error) {
-      console.error('Failed to load mappings:', error);
-      message.error('加载映射程序失败');
-      setRelatedPrograms([]);
-    } finally {
-      setModalLoading(false);
-    }
-  };
-
-  const handleAddRelation = async (values: any) => {
-    try {
-      await programApi.addProgramMappings(
-        currentProgram?.id || 0,
-        values.child_program_ids,
-      );
-      message.success('映射成功');
-      setAddRelationModalVisible(false);
-      relationForm.resetFields();
-      setMappingSearchKeyword('');
-      setDebouncedMappingSearchKeyword('');
-      setMappingFilterProductionLine(null);
-      setMappingFilterVehicleModel(null);
-      setMappingFilterStatus(null);
-      if (currentProgram) {
-        const mappings = await programApi.listProgramMappings(
-          currentProgram.id,
-        );
-        setRelatedPrograms(mappings);
-      }
-      await loadData();
-    } catch (error: any) {
-      console.error('Failed to add mapping:', error);
-      message.error(error.response?.data?.error || '映射失败');
-    }
-  };
-
-  const handleDeleteRelation = async (mappingId: number) => {
-    try {
-      await programApi.deleteProgramMapping(mappingId);
-      message.success('取消映射成功');
-      if (currentProgram) {
-        const mappings = await programApi.listProgramMappings(
-          currentProgram.id,
-        );
-        setRelatedPrograms(mappings);
-      }
-      await loadData();
-    } catch (error) {
-      console.error('Failed to delete mapping:', error);
-      message.error('取消映射失败');
-    }
-  };
-
   const [versionChangeLogSupported, setVersionChangeLogSupported] =
     useState(true);
-  const [batchImportSupported, setBatchImportSupported] = useState(true);
-
-  const [batchImportVisible, setBatchImportVisible] = useState(false);
-  const [batchImportStep, setBatchImportStep] = useState(0);
-  const [batchImportPreview, setBatchImportPreview] =
-    useState<BatchImportPreview | null>(null);
-  const [workstationMappings, setWorkstationMappings] = useState<
-    WorkstationMapping[]
-  >([]);
-  const [batchImportStatus, setBatchImportStatus] =
-    useState<BatchImportStatus | null>(null);
-  const [batchImportPolling, setBatchImportPolling] = useState<ReturnType<
-    typeof setInterval
-  > | null>(null);
-  const [uploadLoading, setUploadLoading] = useState(false);
+  const {
+    batchImportSupported,
+    batchImportVisible,
+    batchImportStep,
+    setBatchImportStep,
+    batchImportPreview,
+    workstationMappings,
+    batchImportStatus,
+    uploadLoading,
+    handleBatchImport,
+    handleBatchUpload,
+    handleMappingChange,
+    handleConfirmBatchImport,
+    handleCloseBatchImport,
+  } = useProgramBatchImport({ loadData });
 
   useEffect(() => {
     if (!fileModalVisible && !modalVisible) {
@@ -593,140 +469,6 @@ const ProgramManagement = () => {
     }
   };
 
-  // 批量导入相关函数
-  const handleBatchImport = () => {
-    if (!batchImportSupported) {
-      message.warning('当前环境未启用批量导入接口');
-      return;
-    }
-    setBatchImportVisible(true);
-    setBatchImportStep(0);
-    setBatchImportPreview(null);
-    setWorkstationMappings([]);
-    setBatchImportStatus(null);
-  };
-
-  const handleBatchUpload = async (file: File) => {
-    setUploadLoading(true);
-    try {
-      const preview = await programApi.uploadBatchArchive(file);
-      setBatchImportPreview(preview);
-
-      // 初始化映射
-      const mappings = preview.workstations.map((ws: WorkstationInfo) => ({
-        workstation_name: ws.name,
-        production_line_id: null,
-        vehicle_model_id: null,
-      }));
-      setWorkstationMappings(mappings);
-
-      setBatchImportStep(1);
-      message.success('文件解析成功');
-    } catch (error: any) {
-      console.error('Failed to upload:', error);
-      if (error?.response?.status === 404 || error?.response?.status === 405) {
-        setBatchImportSupported(false);
-        message.warning('批量导入接口未启用');
-      } else {
-        message.error(error.response?.data?.error || '上传失败');
-      }
-    } finally {
-      setUploadLoading(false);
-    }
-  };
-
-  const handleMappingChange = (
-    workstationName: string,
-    field: string,
-    value: any,
-  ) => {
-    setWorkstationMappings((prev) =>
-      prev.map((m) =>
-        m.workstation_name === workstationName ? { ...m, [field]: value } : m,
-      ),
-    );
-  };
-
-  const handleConfirmBatchImport = async () => {
-    // 验证所有映射
-    const invalidMappings = workstationMappings.filter(
-      (m) => !m.production_line_id,
-    );
-    if (invalidMappings.length > 0) {
-      message.error('请为所有工位选择生产线');
-      return;
-    }
-
-    setBatchImportStep(2);
-
-    try {
-      const response = await programApi.startBatchImport(
-        batchImportPreview?.preview_id,
-        workstationMappings,
-      );
-
-      message.success('批量导入已开始');
-      startBatchImportPolling(response.task_id);
-    } catch (error: any) {
-      console.error('Failed to start batch import:', error);
-      if (error?.response?.status === 404 || error?.response?.status === 405) {
-        setBatchImportSupported(false);
-        message.warning('批量导入接口未启用');
-        setBatchImportStep(0);
-      } else {
-        message.error(error.response?.data?.error || '启动导入失败');
-        setBatchImportStep(1);
-      }
-    }
-  };
-
-  const startBatchImportPolling = (taskId: number) => {
-    if (batchImportPolling) clearInterval(batchImportPolling);
-
-    const interval = setInterval(async () => {
-      try {
-        const status = await programApi.getTaskStatus(taskId);
-        setBatchImportStatus(status);
-
-        if (
-          status.status === 'completed' ||
-          status.status === 'failed'
-        ) {
-          clearInterval(interval);
-          setBatchImportPolling(null);
-          if (status.status === 'completed') {
-            message.success('批量导入完成');
-            loadData();
-          }
-        }
-      } catch (error: any) {
-        console.error('Failed to poll import status:', error);
-        if (
-          error?.response?.status === 404 ||
-          error?.response?.status === 405
-        ) {
-          clearInterval(interval);
-          setBatchImportPolling(null);
-          setBatchImportSupported(false);
-          message.warning('任务状态接口未启用');
-        }
-      }
-    }, 2000);
-
-    setBatchImportPolling(interval);
-  };
-
-  const handleCloseBatchImport = () => {
-    if (batchImportPolling) {
-      clearInterval(batchImportPolling);
-    }
-    setBatchImportVisible(false);
-    setBatchImportStep(0);
-    setBatchImportPreview(null);
-    setWorkstationMappings([]);
-    setBatchImportStatus(null);
-  };
-
   const handleUpload = (record: Program) => {
     setCurrentProgram(record);
     uploadForm.resetFields();
@@ -804,83 +546,17 @@ const ProgramManagement = () => {
     }
   };
 
-  const downloadWithAuth = async (url: string, fallbackName: string) => {
-    const response = await programApi.downloadBlob(url);
-    const blob = new Blob([response.data]);
-
-    const contentDisposition = response.headers['content-disposition'];
-    let filename = fallbackName;
-    if (contentDisposition) {
-      const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(
-        contentDisposition,
-      );
-      const encodedName = match?.[1] || match?.[2];
-      if (encodedName) {
-        filename = decodeURIComponent(encodedName);
-      }
-    }
-
-    const urlObject = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = urlObject;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(urlObject);
-  };
-
-  const handleDownload = async (record: any) => {
-    try {
-      const versionResult = await programApi.listProgramVersions(
-        record.id,
-        1,
-        20,
-      );
-      const versions = versionResult.versions;
-      if (versions.length === 0) {
-        message.warning('该程序暂无上传的文件');
-        return;
-      }
-
-      // 获取最新版本的所有文件
-      const latestVersion =
-        versions.find((version: any) => version.is_current) || versions[0];
-      const files = latestVersion?.files || [];
-      if (files.length > 0) {
-        if (files.length === 1) {
-          // 如果只有一个文件，直接下载
-          const file = files[0];
-          await downloadWithAuth(`/files/download/${file.id}`, file.file_name);
-        } else {
-          // 如果有多个文件，打包下载最新版本
-          await downloadWithAuth(
-            `/files/download/program/${record.id}/latest`,
-            `${record.code || record.id}_${latestVersion.version}.zip`,
-          );
-          message.success('正在打包下载最新版本的所有文件...');
-        }
-      } else {
-        message.warning('该程序暂无可用文件');
-      }
-    } catch (error) {
-      console.error('Failed to download:', error);
-      message.error('下载失败');
-    }
-  };
-
-  const handleDeleteSingleFile = async (fileId: number) => {
-    try {
-      await programApi.deleteFile(fileId);
-      message.success('文件删除成功');
-      if (currentProgram) {
-        await loadVersions(currentProgram.id, versionsPage, versionsPageSize);
-      }
-    } catch (error: any) {
-      console.error('Failed to delete file:', error);
-      message.error(error.response?.data?.error || '删除文件失败');
-    }
-  };
+  const {
+    handleDownload,
+    handleDownloadFile,
+    handleDownloadVersion,
+    handleDeleteSingleFile,
+  } = useProgramDownloads({
+    currentProgram,
+    versionsPage,
+    versionsPageSize,
+    loadVersions,
+  });
 
   const columns = [
     {
@@ -1103,7 +779,7 @@ const ProgramManagement = () => {
                   label: '映射管理',
                   onClick: () => handleViewRelations(record),
                 },
-                ...((isAdmin || isLineAdmin)
+                ...(isAdmin || isLineAdmin
                   ? [
                       {
                         type: 'divider' as const,
@@ -1212,9 +888,9 @@ const ProgramManagement = () => {
     }
 
     try {
-      await downloadWithAuth(
-        `/files/download/version/${editorSelectedVersion.version}?program_id=${currentProgram.id}`,
-        `${currentProgram.code || currentProgram.id}_${editorSelectedVersion.version}.zip`,
+      await handleDownloadVersion(
+        currentProgram,
+        editorSelectedVersion.version,
       );
     } catch (error) {
       console.error('Failed to download version files:', error);
@@ -1229,9 +905,9 @@ const ProgramManagement = () => {
     }
 
     try {
-      await downloadWithAuth(
-        `/files/download/version/${fileModalSelectedVersion.version}?program_id=${currentProgram.id}`,
-        `${currentProgram.code || currentProgram.id}_${fileModalSelectedVersion.version}.zip`,
+      await handleDownloadVersion(
+        currentProgram,
+        fileModalSelectedVersion.version,
       );
     } catch (error) {
       console.error('Failed to download file modal version files:', error);
@@ -1967,8 +1643,8 @@ const ProgramManagement = () => {
                                         );
                                         return;
                                       }
-                                      void downloadWithAuth(
-                                        `/files/download/${file.id}`,
+                                      void handleDownloadFile(
+                                        file.id,
                                         file.file_name,
                                       );
                                     }}
@@ -2317,8 +1993,8 @@ const ProgramManagement = () => {
                                     );
                                     return;
                                   }
-                                  void downloadWithAuth(
-                                    `/files/download/${file.id}`,
+                                  void handleDownloadFile(
+                                    file.id,
                                     file.file_name,
                                   );
                                 }}
@@ -2742,15 +2418,7 @@ const ProgramManagement = () => {
       <Modal
         title="添加映射子程序"
         open={addRelationModalVisible}
-        onCancel={() => {
-          setAddRelationModalVisible(false);
-          relationForm.resetFields();
-          setMappingSearchKeyword('');
-          setDebouncedMappingSearchKeyword('');
-          setMappingFilterProductionLine(null);
-          setMappingFilterVehicleModel(null);
-          setMappingFilterStatus(null);
-        }}
+        onCancel={closeAddRelationModal}
         onOk={() => relationForm.submit()}
       >
         <Form

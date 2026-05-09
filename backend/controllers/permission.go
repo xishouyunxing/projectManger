@@ -283,7 +283,7 @@ func userPermissionFromBits(user models.User, bits services.LinePermissionBits, 
 }
 
 func syntheticLinePermissionID(ownerID, lineID uint) uint {
-	return ownerID*1000000 + lineID
+	return services.SyntheticLinePermissionID(ownerID, lineID)
 }
 
 func loadRuleBackedUserPermission(userID, lineID uint) (models.UserPermission, bool, error) {
@@ -306,35 +306,30 @@ func loadRuleBackedUserPermission(userID, lineID uint) (models.UserPermission, b
 }
 
 func loadLegacyUserPermissionByID(permissionID uint, permission *models.UserPermission) error {
-	var users []models.User
-	if err := database.DB.Select("id").Find(&users).Error; err != nil {
-		return err
+	userID, lineID, ok := services.DecodeSyntheticLinePermissionID(permissionID)
+	if !ok {
+		return gorm.ErrRecordNotFound
 	}
-	lines, err := loadPermissionMatrixLines()
+	if err := validateUserPermissionRelations(userID, lineID); err != nil {
+		return gorm.ErrRecordNotFound
+	}
+	bits, exists, err := services.LoadSubjectLinePermissionBitsByLine(services.PermissionSubject{Type: models.PermissionSubjectUser, ID: userID}, lineID)
 	if err != nil {
 		return err
 	}
-	for _, user := range users {
-		bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectUser, ID: user.ID}, lines)
-		if err != nil {
-			return err
-		}
-		for _, bit := range bits {
-			if syntheticLinePermissionID(user.ID, bit.ProductionLineID) == permissionID {
-				*permission = models.UserPermission{
-					ID:               permissionID,
-					UserID:           user.ID,
-					ProductionLineID: bit.ProductionLineID,
-					CanView:          bit.CanView,
-					CanDownload:      bit.CanDownload,
-					CanUpload:        bit.CanUpload,
-					CanManage:        bit.CanManage,
-				}
-				return nil
-			}
-		}
+	if !exists {
+		return gorm.ErrRecordNotFound
 	}
-	return gorm.ErrRecordNotFound
+	*permission = models.UserPermission{
+		ID:               permissionID,
+		UserID:           userID,
+		ProductionLineID: lineID,
+		CanView:          bits.CanView,
+		CanDownload:      bits.CanDownload,
+		CanUpload:        bits.CanUpload,
+		CanManage:        bits.CanManage,
+	}
+	return nil
 }
 
 func applyUserPermissionUpdates(permission *models.UserPermission, updates map[string]interface{}) {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // GetRoles 返回所有角色列表。
@@ -184,17 +185,30 @@ func DeleteRole(c *gin.Context) {
 		return
 	}
 
-	// 删除关联数据
-	database.DB.Where("role_id = ?", roleID).Delete(&models.RolePermission{})
-	database.DB.Where("role_id = ?", roleID).Delete(&models.RoleLinePermission{})
-	database.DB.Unscoped().
-		Where("subject_type = ? AND subject_id = ?", models.PermissionSubjectRole, roleID).
-		Delete(&models.PermissionRule{})
-	database.DB.Unscoped().
-		Where("subject_type = ? AND subject_id = ?", "role_default", roleID).
-		Delete(&models.PermissionRule{})
-
-	if err := database.DB.Delete(&role).Error; err != nil {
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("role_id = ?", roleID).Delete(&models.RolePermission{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("role_id = ?", roleID).Delete(&models.RoleLinePermission{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().
+			Where("subject_type = ? AND subject_id = ?", models.PermissionSubjectRole, roleID).
+			Delete(&models.PermissionRule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().
+			Where("subject_type = ? AND subject_id = ? AND subject_key = ?", models.PermissionSubjectRole, 0, role.Name).
+			Delete(&models.PermissionRule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().
+			Where("subject_type = ? AND subject_id = ?", "role_default", roleID).
+			Delete(&models.PermissionRule{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&role).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除角色失败"})
 		return
 	}

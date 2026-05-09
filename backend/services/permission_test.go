@@ -38,6 +38,25 @@ func openPermissionServiceTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestSyntheticLinePermissionIDRoundTrip(t *testing.T) {
+	id := SyntheticLinePermissionID(12, 34)
+	ownerID, lineID, ok := DecodeSyntheticLinePermissionID(id)
+	if !ok {
+		t.Fatal("expected synthetic id to decode")
+	}
+	if ownerID != 12 || lineID != 34 {
+		t.Fatalf("expected owner=12 line=34, got owner=%d line=%d", ownerID, lineID)
+	}
+}
+
+func TestDecodeSyntheticLinePermissionIDRejectsInvalidIDs(t *testing.T) {
+	for _, id := range []uint{0, syntheticLinePermissionIDFactor, 34} {
+		if ownerID, lineID, ok := DecodeSyntheticLinePermissionID(id); ok {
+			t.Fatalf("expected id %d to be invalid, got owner=%d line=%d", id, ownerID, lineID)
+		}
+	}
+}
+
 func TestResolveUserLinePermissionsUsesExplicitDenyBeforeDepartmentAllow(t *testing.T) {
 	db := openPermissionServiceTestDB(t)
 	departmentID := uint(3)

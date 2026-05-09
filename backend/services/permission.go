@@ -69,6 +69,8 @@ type LinePermissionBits struct {
 	Source           string
 }
 
+const syntheticLinePermissionIDFactor uint = 1000000
+
 type PermissionSubject struct {
 	Type string
 	ID   uint
@@ -437,6 +439,19 @@ func LoadSubjectLinePermissionBitsByLine(subject PermissionSubject, productionLi
 		return LinePermissionBits{ProductionLineID: productionLineID, Source: "none"}, false, nil
 	}
 	return bits[0], true, nil
+}
+
+func SyntheticLinePermissionID(ownerID, lineID uint) uint {
+	return ownerID*syntheticLinePermissionIDFactor + lineID
+}
+
+func DecodeSyntheticLinePermissionID(permissionID uint) (uint, uint, bool) {
+	ownerID := permissionID / syntheticLinePermissionIDFactor
+	lineID := permissionID % syntheticLinePermissionIDFactor
+	if ownerID == 0 || lineID == 0 {
+		return 0, 0, false
+	}
+	return ownerID, lineID, true
 }
 
 func normalizeSubject(subject PermissionSubject) PermissionSubject {

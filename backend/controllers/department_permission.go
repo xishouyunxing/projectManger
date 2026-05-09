@@ -314,35 +314,30 @@ func loadRuleBackedDepartmentPermission(departmentID, lineID uint) (models.Depar
 }
 
 func loadLegacyDepartmentPermissionByID(permissionID uint, permission *models.DepartmentPermission) error {
-	var departments []models.Department
-	if err := database.DB.Find(&departments).Error; err != nil {
-		return err
+	departmentID, lineID, ok := services.DecodeSyntheticLinePermissionID(permissionID)
+	if !ok {
+		return gorm.ErrRecordNotFound
 	}
-	lines, err := loadPermissionMatrixLines()
+	if err := validateDepartmentPermissionRelations(departmentID, lineID); err != nil {
+		return gorm.ErrRecordNotFound
+	}
+	bits, exists, err := services.LoadSubjectLinePermissionBitsByLine(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: departmentID}, lineID)
 	if err != nil {
 		return err
 	}
-	for _, department := range departments {
-		bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectDepartment, ID: department.ID}, lines)
-		if err != nil {
-			return err
-		}
-		for _, bit := range bits {
-			if syntheticLinePermissionID(department.ID, bit.ProductionLineID) == permissionID {
-				*permission = models.DepartmentPermission{
-					ID:               permissionID,
-					DepartmentID:     department.ID,
-					ProductionLineID: bit.ProductionLineID,
-					CanView:          bit.CanView,
-					CanDownload:      bit.CanDownload,
-					CanUpload:        bit.CanUpload,
-					CanManage:        bit.CanManage,
-				}
-				return nil
-			}
-		}
+	if !exists {
+		return gorm.ErrRecordNotFound
 	}
-	return gorm.ErrRecordNotFound
+	*permission = models.DepartmentPermission{
+		ID:               permissionID,
+		DepartmentID:     departmentID,
+		ProductionLineID: lineID,
+		CanView:          bits.CanView,
+		CanDownload:      bits.CanDownload,
+		CanUpload:        bits.CanUpload,
+		CanManage:        bits.CanManage,
+	}
+	return nil
 }
 
 func applyDepartmentPermissionUpdates(permission *models.DepartmentPermission, updates map[string]interface{}) {
