@@ -37,6 +37,7 @@ func SetupRouter() *gin.Engine {
 		})
 		// 登录接口限流：每 IP 每分钟 5 次（防暴力破解）
 		public.POST("/login", middleware.RateLimiter(5.0/60, 5), controllers.Login)
+		public.POST("/logout", controllers.Logout)
 	}
 
 	protected := r.Group("/api")

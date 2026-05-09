@@ -1,9 +1,11 @@
 package controllers
 
 import (
+	"archive/zip"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"crane-system/config"
@@ -34,6 +36,113 @@ func TestIsPathWithinBackupDir(t *testing.T) {
 	traversalPath := filepath.Join(backupRoot, "..", "outside", "backup.sql")
 	if isPathWithinBackupDir(traversalPath) {
 		t.Fatalf("expected traversal path to be rejected: %s", traversalPath)
+	}
+}
+
+func createTestZip(t *testing.T, zipPath string, files map[string]string) {
+	t.Helper()
+
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("create zip: %v", err)
+	}
+	defer zipFile.Close()
+
+	zipWriter := zip.NewWriter(zipFile)
+	defer zipWriter.Close()
+
+	for name, content := range files {
+		writer, err := zipWriter.Create(name)
+		if err != nil {
+			t.Fatalf("create zip entry %s: %v", name, err)
+		}
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatalf("write zip entry %s: %v", name, err)
+		}
+	}
+}
+
+func TestExtractZipBackupWithLimitsAllowsNormalZip(t *testing.T) {
+	tmpRoot := t.TempDir()
+	zipPath := filepath.Join(tmpRoot, "backup.zip")
+	targetDir := filepath.Join(tmpRoot, "target")
+	createTestZip(t, zipPath, map[string]string{"nested/file.txt": "ok"})
+
+	err := extractZipBackupWithLimits(zipPath, targetDir, zipExtractionLimits{
+		MaxEntries:   10,
+		MaxFileSize:  100,
+		MaxTotalSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("extract zip: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(targetDir, "nested", "file.txt"))
+	if err != nil {
+		t.Fatalf("read extracted file: %v", err)
+	}
+	if string(content) != "ok" {
+		t.Fatalf("unexpected extracted content: %q", string(content))
+	}
+}
+
+func TestExtractZipBackupWithLimitsRejectsTraversal(t *testing.T) {
+	tmpRoot := t.TempDir()
+	zipPath := filepath.Join(tmpRoot, "backup.zip")
+	createTestZip(t, zipPath, map[string]string{"../escape.txt": "bad"})
+
+	err := extractZipBackupWithLimits(zipPath, filepath.Join(tmpRoot, "target"), zipExtractionLimits{
+		MaxEntries:   10,
+		MaxFileSize:  100,
+		MaxTotalSize: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsafe archive path") {
+		t.Fatalf("expected unsafe archive path error, got %v", err)
+	}
+}
+
+func TestExtractZipBackupWithLimitsRejectsEntryCountLimit(t *testing.T) {
+	tmpRoot := t.TempDir()
+	zipPath := filepath.Join(tmpRoot, "backup.zip")
+	createTestZip(t, zipPath, map[string]string{"a.txt": "a", "b.txt": "b"})
+
+	err := extractZipBackupWithLimits(zipPath, filepath.Join(tmpRoot, "target"), zipExtractionLimits{
+		MaxEntries:   1,
+		MaxFileSize:  100,
+		MaxTotalSize: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "entry count exceeds") {
+		t.Fatalf("expected entry count error, got %v", err)
+	}
+}
+
+func TestExtractZipBackupWithLimitsRejectsSingleFileLimit(t *testing.T) {
+	tmpRoot := t.TempDir()
+	zipPath := filepath.Join(tmpRoot, "backup.zip")
+	createTestZip(t, zipPath, map[string]string{"large.txt": "too-large"})
+
+	err := extractZipBackupWithLimits(zipPath, filepath.Join(tmpRoot, "target"), zipExtractionLimits{
+		MaxEntries:   10,
+		MaxFileSize:  3,
+		MaxTotalSize: 100,
+	})
+	if err == nil || !strings.Contains(err.Error(), "file size limit") {
+		t.Fatalf("expected file size limit error, got %v", err)
+	}
+}
+
+func TestExtractZipBackupWithLimitsRejectsTotalSizeLimit(t *testing.T) {
+	tmpRoot := t.TempDir()
+	zipPath := filepath.Join(tmpRoot, "backup.zip")
+	createTestZip(t, zipPath, map[string]string{"a.txt": "abcd", "b.txt": "efgh"})
+
+	err := extractZipBackupWithLimits(zipPath, filepath.Join(tmpRoot, "target"), zipExtractionLimits{
+		MaxEntries:   10,
+		MaxFileSize:  100,
+		MaxTotalSize: 6,
+	})
+	if err == nil || !strings.Contains(err.Error(), "total uncompressed size") {
+		t.Fatalf("expected total size limit error, got %v", err)
 	}
 }
 

@@ -95,12 +95,11 @@ const parseStoredPermissions = (storedPermissions: string | null) => {
 };
 
 const getInitialState = () => {
-  const storedToken = localStorage.getItem('token');
   const storedUser = localStorage.getItem('user');
   const storedPermissions = localStorage.getItem('permissions');
   const storedLastActivity = localStorage.getItem('lastActivity');
 
-  if (storedLastActivity && storedToken && storedUser) {
+  if (storedLastActivity && storedUser) {
     const lastActivity = parseInt(storedLastActivity, 10);
     if (Date.now() - lastActivity > AUTO_LOGOUT_TIME) {
       clearStoredAuth();
@@ -110,7 +109,7 @@ const getInitialState = () => {
 
   if (!storedUser) {
     return {
-      token: storedToken,
+      token: null,
       user: null,
       permissions: parseStoredPermissions(storedPermissions),
     };
@@ -118,7 +117,7 @@ const getInitialState = () => {
 
   try {
     return {
-      token: storedToken,
+      token: 'cookie',
       user: JSON.parse(storedUser),
       permissions: parseStoredPermissions(storedPermissions),
     };
@@ -142,6 +141,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const logout = useCallback(() => {
+    void api.post('/logout').catch(() => undefined);
     setUser(null);
     setToken(null);
     setPermissions(emptyPermissions);
@@ -191,17 +191,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       password,
     });
 
-    const {
-      token: newToken,
-      user: newUser,
-      permissions: permissionPayload,
-    } = response.data;
+    const { user: newUser, permissions: permissionPayload } = response.data;
     const parsedPermissions = normalizePermissions(permissionPayload);
 
-    setToken(newToken);
+    setToken('cookie');
     setUser(newUser);
     setPermissions(parsedPermissions);
-    localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(newUser));
     localStorage.setItem('permissions', JSON.stringify(parsedPermissions));
     updateLastActivity();

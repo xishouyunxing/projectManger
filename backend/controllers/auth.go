@@ -8,6 +8,7 @@ import (
 	"crane-system/services"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,41 @@ import (
 type LoginRequest struct {
 	EmployeeID string `json:"employee_id" binding:"required"`
 	Password   string `json:"password" binding:"required"`
+}
+
+const authTokenCookieName = "auth_token"
+
+const authTokenMaxAgeSeconds = 24 * 60 * 60
+
+func shouldUseSecureAuthCookie(c *gin.Context) bool {
+	if c.Request != nil && c.Request.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
+func setAuthCookie(c *gin.Context, token string) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     authTokenCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   authTokenMaxAgeSeconds,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   shouldUseSecureAuthCookie(c),
+	})
+}
+
+func clearAuthCookie(c *gin.Context) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     authTokenCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   shouldUseSecureAuthCookie(c),
+	})
 }
 
 // Login 校验工号和密码并签发 JWT。
@@ -94,6 +130,8 @@ func Login(c *gin.Context) {
 		roleIDPtr = user.RoleID
 	}
 
+	setAuthCookie(c, tokenString)
+
 	c.JSON(http.StatusOK, gin.H{
 		"token": tokenString,
 		"user": gin.H{
@@ -110,4 +148,9 @@ func Login(c *gin.Context) {
 			"managed_line_ids": managedIDs,
 		},
 	})
+}
+
+func Logout(c *gin.Context) {
+	clearAuthCookie(c)
+	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }

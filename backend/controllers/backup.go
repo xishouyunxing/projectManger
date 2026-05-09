@@ -7,6 +7,7 @@ import (
 	"crane-system/utils"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -35,6 +36,18 @@ func isPathWithinBackupDir(targetPath string) bool {
 		return false
 	}
 	return true
+}
+
+type zipExtractionLimits struct {
+	MaxEntries   int
+	MaxFileSize  uint64
+	MaxTotalSize uint64
+}
+
+var defaultZipExtractionLimits = zipExtractionLimits{
+	MaxEntries:   10000,
+	MaxFileSize:  500 * 1024 * 1024,
+	MaxTotalSize: 5 * 1024 * 1024 * 1024,
 }
 
 // CreateDatabaseBackup 创建数据库备份
@@ -514,13 +527,32 @@ func createZipBackup(sourceDir, targetPath string) error {
 
 // extractZipBackup 解压ZIP备份
 func extractZipBackup(zipPath, targetDir string) error {
+	return extractZipBackupWithLimits(zipPath, targetDir, defaultZipExtractionLimits)
+}
+
+func extractZipBackupWithLimits(zipPath, targetDir string, limits zipExtractionLimits) error {
 	zipReader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
 	}
 	defer zipReader.Close()
 
+	var totalSize uint64
+	if limits.MaxEntries > 0 && len(zipReader.File) > limits.MaxEntries {
+		return fmt.Errorf("zip entry count exceeds limit: %d > %d", len(zipReader.File), limits.MaxEntries)
+	}
+
 	for _, file := range zipReader.File {
+		if limits.MaxFileSize > 0 && file.UncompressedSize64 > limits.MaxFileSize {
+			return fmt.Errorf("zip entry exceeds file size limit: %s", file.Name)
+		}
+		if limits.MaxTotalSize > 0 {
+			if file.UncompressedSize64 > limits.MaxTotalSize-totalSize {
+				return fmt.Errorf("zip total uncompressed size exceeds limit")
+			}
+			totalSize += file.UncompressedSize64
+		}
+
 		filePath := filepath.Join(targetDir, file.Name)
 
 		// 检查路径安全性
@@ -555,11 +587,24 @@ func extractZipBackup(zipPath, targetDir string) error {
 		}
 
 		// 复制文件内容
-		_, copyErr := io.Copy(targetFile, fileReader)
+		if file.UncompressedSize64 > math.MaxInt64-1 {
+			return fmt.Errorf("zip entry declared size is too large: %s", file.Name)
+		}
+		copyLimit := int64(file.UncompressedSize64) + 1
+		if limits.MaxFileSize > 0 && limits.MaxFileSize < file.UncompressedSize64 {
+			copyLimit = int64(limits.MaxFileSize) + 1
+		}
+		written, copyErr := io.Copy(targetFile, io.LimitReader(fileReader, copyLimit))
 		closeTargetErr := targetFile.Close()
 		closeReaderErr := fileReader.Close()
 		if copyErr != nil {
 			return copyErr
+		}
+		if uint64(written) > file.UncompressedSize64 {
+			return fmt.Errorf("zip entry exceeded declared size while extracting: %s", file.Name)
+		}
+		if limits.MaxFileSize > 0 && uint64(written) > limits.MaxFileSize {
+			return fmt.Errorf("zip entry exceeds file size limit while extracting: %s", file.Name)
 		}
 		if closeTargetErr != nil {
 			return closeTargetErr

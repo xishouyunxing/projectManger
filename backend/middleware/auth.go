@@ -18,20 +18,32 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// AuthMiddleware 校验 Bearer JWT，并把 user_id/user_role/user 写入 Gin Context。
-// 每次请求都会重新读取用户状态，确保禁用账号或角色变更能及时生效。
+const authTokenCookieName = "auth_token"
+
+func tokenFromRequest(c *gin.Context) (string, string) {
+	if cookie, err := c.Cookie(authTokenCookieName); err == nil && cookie != "" {
+		return cookie, ""
+	}
+
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		return "", "未提供认证令牌"
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return "", "令牌格式错误"
+	}
+
+	return tokenString, ""
+}
+
+// AuthMiddleware validates either the HttpOnly auth cookie or a legacy Bearer JWT.
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "未提供认证令牌"})
-			c.Abort()
-			return
-		}
-
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		if tokenString == authHeader {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌格式错误"})
+		tokenString, tokenErr := tokenFromRequest(c)
+		if tokenErr != "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": tokenErr})
 			c.Abort()
 			return
 		}
@@ -73,9 +85,6 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-// AdminMiddleware 只依赖 AuthMiddleware 写入的 user_role。
-// 使用时应放在受保护路由之后，不能单独挂在公共路由上。
-// 兼容旧角色名 "admin" 和新角色名 "system_admin"。
 func AdminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, exists := c.Get("user_role")
@@ -88,8 +97,6 @@ func AdminMiddleware() gin.HandlerFunc {
 	}
 }
 
-// RequirePermission 返回一个中间件，要求用户拥有指定功能权限。
-// system_admin 硬编码绕过，不走权限查询。
 func RequirePermission(permissionCode string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, _ := c.Get("user_role")
@@ -120,8 +127,6 @@ func RequirePermission(permissionCode string) gin.HandlerFunc {
 	}
 }
 
-// RequireAnyPermission 返回一个中间件，要求用户拥有指定权限中的任意一个。
-// 适用于被多个页面共享的 GET 接口（如用户列表被用户管理和权限管理共用）。
 func RequireAnyPermission(permissionCodes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, _ := c.Get("user_role")
