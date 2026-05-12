@@ -26,7 +26,8 @@ func Connect() error {
 
 	var err error
 	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(gormLogLevel()),
+		DisableForeignKeyConstraintWhenMigrating: true,
+		Logger:                                   logger.Default.LogMode(gormLogLevel()),
 	})
 	if err != nil {
 		return err

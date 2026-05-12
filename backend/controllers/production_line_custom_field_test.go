@@ -25,7 +25,10 @@ func openProductionLineCustomFieldTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	config.LoadConfig()
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+		Logger:                                   logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
