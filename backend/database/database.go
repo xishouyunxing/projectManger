@@ -189,16 +189,16 @@ func runWithMigrationLock(fn func(*gorm.DB) error) error {
 	}
 
 	return DB.Connection(func(db *gorm.DB) error {
-		if err := acquireMigrationLock(db); err != nil {
+		if err := acquireMigrationLock(db.Session(&gorm.Session{NewDB: true})); err != nil {
 			return err
 		}
 		defer func() {
-			if err := releaseMigrationLock(db); err != nil {
+			if err := releaseMigrationLock(db.Session(&gorm.Session{NewDB: true})); err != nil {
 				slog.Error("release migration lock failed", "error", err)
 			}
 		}()
 
-		return fn(db)
+		return fn(db.Session(&gorm.Session{NewDB: true}))
 	})
 }
 
@@ -214,7 +214,7 @@ func acquireMigrationLock(db *gorm.DB) error {
 }
 
 func releaseMigrationLock(db *gorm.DB) error {
-	var result any
+	var result int
 	return db.Raw("SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&result).Error
 }
 
