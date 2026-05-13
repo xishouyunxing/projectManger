@@ -6,12 +6,13 @@ import (
 	"crane-system/services"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
 
-func TestDeleteRoleRemovesRoleKeyDefaultPermissionRules(t *testing.T) {
+func TestDeleteRoleRemovesRuleBackedPermissionsWithoutMaintainingLegacyRows(t *testing.T) {
 	database.DB = openProductionLineCustomFieldTestDB(t)
 	services.InvalidateAllCache()
 
@@ -109,7 +110,41 @@ func TestDeleteRoleRemovesRoleKeyDefaultPermissionRules(t *testing.T) {
 	if err := database.DB.Model(&models.RoleLinePermission{}).Where("role_id = ?", role.ID).Count(&roleLinePermissionCount).Error; err != nil {
 		t.Fatalf("count role line permissions: %v", err)
 	}
-	if roleLinePermissionCount != 0 {
-		t.Fatalf("expected role line permissions to be deleted, got %d", roleLinePermissionCount)
+	if roleLinePermissionCount != 1 {
+		t.Fatalf("expected legacy role line permissions to be left untouched, got %d", roleLinePermissionCount)
+	}
+}
+
+func TestGetRoleReturnsLinePermissionsFromPermissionRules(t *testing.T) {
+	database.DB = openProductionLineCustomFieldTestDB(t)
+	services.InvalidateAllCache()
+
+	role := models.Role{Name: "custom_reviewer", Description: "Custom Reviewer", Status: "active"}
+	if err := database.DB.Create(&role).Error; err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	line := models.ProductionLine{Name: "Rule Backed Line", Code: "RULE-ROLE", Type: "upper", Status: "active"}
+	if err := database.DB.Create(&line).Error; err != nil {
+		t.Fatalf("create line: %v", err)
+	}
+	if err := services.SavePermissionRuleChanges(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: role.ID, Key: role.Name}, []services.PermissionRuleChange{
+		{ResourceID: line.ID, Action: models.PermissionActionView, Decision: models.PermissionDecisionAllow},
+		{ResourceID: line.ID, Action: models.PermissionActionDownload, Decision: models.PermissionDecisionDeny},
+	}); err != nil {
+		t.Fatalf("seed permission rules: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/roles/:id", GetRole)
+
+	req := httptest.NewRequest(http.MethodGet, "/roles/1", nil)
+	resp := httptest.NewRecorder()
+	r.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"line_permissions"`) || !strings.Contains(resp.Body.String(), `"can_view":true`) {
+		t.Fatalf("expected rule-backed line permissions in response, got %s", resp.Body.String())
 	}
 }

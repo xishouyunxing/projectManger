@@ -228,10 +228,15 @@ func DeleteProductionLine(c *gin.Context) {
 	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
 		{Model: &models.Program{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "programs"},
 		{Model: &models.ProductionLineCustomField{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "custom fields"},
-		{Model: &models.UserPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "user permissions"},
-		{Model: &models.DepartmentPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "department permissions"},
-		{Model: &models.RoleDefaultPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "role default permissions"},
-		{Model: &models.DepartmentDefaultPermission{}, Where: "production_line_id = ?", Args: []any{lineID}, Label: "department default permissions"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "production line is in use by " + dependency})
+		return
+	}
+	if dependency, err := findPermissionRuleDependency([]permissionRuleDependencyCheck{
+		{Where: "resource_type = ? AND resource_id = ?", Args: []any{models.PermissionResourceProductionLine, lineID}, Label: "permission rules"},
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
 		return

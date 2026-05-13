@@ -170,8 +170,15 @@ func DeleteDepartment(c *gin.Context) {
 
 	if dependency, err := findMasterDataDependency([]masterDataDependencyCheck{
 		{Model: &models.User{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "users"},
-		{Model: &models.DepartmentPermission{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "department permissions"},
-		{Model: &models.DepartmentDefaultPermission{}, Where: "department_id = ?", Args: []any{departmentID}, Label: "department default permissions"},
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
+		return
+	} else if dependency != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "department is in use by " + dependency})
+		return
+	}
+	if dependency, err := findPermissionRuleDependency([]permissionRuleDependencyCheck{
+		{Where: "subject_type IN ? AND subject_id = ?", Args: []any{[]string{models.PermissionSubjectDepartment, models.PermissionSubjectDepartmentDefault}, departmentID}, Label: "permission rules"},
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "dependency check failed"})
 		return

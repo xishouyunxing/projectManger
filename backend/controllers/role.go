@@ -57,8 +57,16 @@ func GetRole(c *gin.Context) {
 	}
 
 	// 加载产线权限
-	var linePerms []models.RoleLinePermission
-	database.DB.Preload("ProductionLine").Where("role_id = ?", roleID).Find(&linePerms)
+	var lines []models.ProductionLine
+	if err := database.DB.Preload("Process").Order("id ASC").Find(&lines).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询产线权限失败"})
+		return
+	}
+	linePerms, err := loadRoleLinePermissionDTOs(role, lines)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询产线权限失败"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"role":             role,
@@ -187,9 +195,6 @@ func DeleteRole(c *gin.Context) {
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("role_id = ?", roleID).Delete(&models.RolePermission{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("role_id = ?", roleID).Delete(&models.RoleLinePermission{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Unscoped().
@@ -385,4 +390,32 @@ func GetRoleLinePermissions(c *gin.Context) {
 		"lines":       lines,
 		"permissions": rows,
 	})
+}
+
+func loadRoleLinePermissionDTOs(role models.Role, lines []models.ProductionLine) ([]models.RoleLinePermission, error) {
+	bits, err := services.LoadSubjectLinePermissionBits(services.PermissionSubject{Type: models.PermissionSubjectRole, ID: role.ID, Key: role.Name}, lines)
+	if err != nil {
+		return nil, err
+	}
+	lineByID := make(map[uint]models.ProductionLine, len(lines))
+	for _, line := range lines {
+		lineByID[line.ID] = line
+	}
+	linePerms := make([]models.RoleLinePermission, 0, len(bits))
+	for _, bit := range bits {
+		linePerm := models.RoleLinePermission{
+			ID:               syntheticLinePermissionID(role.ID, bit.ProductionLineID),
+			RoleID:           role.ID,
+			ProductionLineID: bit.ProductionLineID,
+			CanView:          bit.CanView,
+			CanDownload:      bit.CanDownload,
+			CanUpload:        bit.CanUpload,
+			CanManage:        bit.CanManage,
+		}
+		if line, ok := lineByID[bit.ProductionLineID]; ok {
+			linePerm.ProductionLine = line
+		}
+		linePerms = append(linePerms, linePerm)
+	}
+	return linePerms, nil
 }

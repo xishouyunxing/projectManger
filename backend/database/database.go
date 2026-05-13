@@ -3,8 +3,10 @@ package database
 import (
 	"crane-system/config"
 	"crane-system/models"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -14,6 +16,24 @@ import (
 )
 
 var DB *gorm.DB
+
+const (
+	migrationLockName               = "crane_system_migrations"
+	migrationLockTimeoutSeconds     = 30
+	migrationStepSchemaBootstrap    = "schema_bootstrap"
+	migrationStepBaseSeed           = "base_seed"
+	migrationStepPermissionBackfill = "legacy_permission_backfill"
+)
+
+type SchemaMigration struct {
+	ID        uint      `gorm:"primarykey"`
+	Name      string    `gorm:"size:100;not null;uniqueIndex"`
+	AppliedAt time.Time `gorm:"not null"`
+}
+
+func (SchemaMigration) TableName() string {
+	return "schema_migrations"
+}
 
 func Connect() error {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
@@ -67,6 +87,7 @@ func Close() error {
 
 func migrationModels() []any {
 	return []any{
+		&SchemaMigration{},
 		&models.Department{},
 		&models.Process{},
 		&models.VehicleModel{},
@@ -94,38 +115,123 @@ func migrationModels() []any {
 }
 
 func ensureTables() error {
+	return ensureTablesWithDB(DB)
+}
+
+func ensureTablesWithDB(db *gorm.DB) error {
 	models := migrationModels()
 	var failed []string
 
-	// 逐模型迁移，记录失败的模型但不阻塞后续建表
 	for _, m := range models {
-		if err := DB.AutoMigrate(m); err != nil {
-			slog.Warn("AutoMigrate 模型失败，将重试", "model", fmt.Sprintf("%T", m), "error", err)
-			// 重试一次：可能是 GORM 尝试 DROP 旧约束时先失败，但第二次表已部分创建
-			if retryErr := DB.AutoMigrate(m); retryErr != nil {
-				slog.Error("AutoMigrate 模型重试仍失败", "model", fmt.Sprintf("%T", m), "error", retryErr)
-				failed = append(failed, fmt.Sprintf("%T", m))
-			}
+		if err := ensureModelSchema(db, m); err != nil {
+			slog.Error("schema migration failed", "model", fmt.Sprintf("%T", m), "error", err)
+			failed = append(failed, fmt.Sprintf("%T", m))
 		}
 	}
 
-	// 验证所有表是否已创建
 	var missing []string
 	for _, m := range models {
-		if !DB.Migrator().HasTable(m) {
+		if !db.Migrator().HasTable(m) {
 			missing = append(missing, fmt.Sprintf("%T", m))
 		}
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("以下模型的表未成功创建: %v", missing)
+		return fmt.Errorf("tables were not created for models: %v", missing)
 	}
 
 	if len(failed) > 0 {
-		slog.Warn("部分模型迁移时遇到错误（表已创建）", "models", failed)
+		return fmt.Errorf("schema migrations failed for models: %v", failed)
 	}
 
 	return nil
+}
+
+func ensureModelSchema(db *gorm.DB, model any) error {
+	if !db.Migrator().HasTable(model) {
+		return db.Migrator().CreateTable(model)
+	}
+
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(model); err != nil {
+		return err
+	}
+
+	for _, field := range stmt.Schema.Fields {
+		if field.DBName == "" {
+			continue
+		}
+		if !db.Migrator().HasColumn(model, field.DBName) {
+			if err := db.Migrator().AddColumn(model, field.Name); err != nil {
+				return fmt.Errorf("add column %s: %w", field.DBName, err)
+			}
+		}
+	}
+
+	for _, idx := range stmt.Schema.ParseIndexes() {
+		if idx.Name == "" || db.Migrator().HasIndex(model, idx.Name) {
+			continue
+		}
+		if err := db.Migrator().CreateIndex(model, idx.Name); err != nil {
+			return fmt.Errorf("create index %s: %w", idx.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func runWithMigrationLock(fn func(*gorm.DB) error) error {
+	if DB == nil {
+		return errors.New("database is not connected")
+	}
+	if DB.Dialector.Name() != "mysql" {
+		return fn(DB)
+	}
+
+	return DB.Connection(func(db *gorm.DB) error {
+		if err := acquireMigrationLock(db); err != nil {
+			return err
+		}
+		defer func() {
+			if err := releaseMigrationLock(db); err != nil {
+				slog.Error("release migration lock failed", "error", err)
+			}
+		}()
+
+		return fn(db)
+	})
+}
+
+func acquireMigrationLock(db *gorm.DB) error {
+	var result int
+	if err := db.Raw("SELECT GET_LOCK(?, ?)", migrationLockName, migrationLockTimeoutSeconds).Scan(&result).Error; err != nil {
+		return err
+	}
+	if result != 1 {
+		return fmt.Errorf("could not acquire migration lock %q", migrationLockName)
+	}
+	return nil
+}
+
+func releaseMigrationLock(db *gorm.DB) error {
+	var result any
+	return db.Raw("SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&result).Error
+}
+
+func recordMigrationStep(db *gorm.DB, name string) error {
+	step := SchemaMigration{Name: name, AppliedAt: time.Now()}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoNothing: true,
+	}).Create(&step).Error
+}
+
+func migrationStepRecorded(db *gorm.DB, name string) (bool, error) {
+	var count int64
+	if err := db.Model(&SchemaMigration{}).Where("name = ?", name).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // backfillUserRoleIDs 在 Go 层完成 role 字符串 → role_id 的映射。
@@ -133,22 +239,23 @@ func ensureTables() error {
 // 这里根据 role 名称查找 Role 表，自动回填 role_id。
 // 旧角色名映射：admin → system_admin，其余保持原名。
 func backfillUserRoleIDs() error {
-	// 跳过：role_id 列尚不存在（AutoMigrate 会加列，但回填应在加列之后）
-	if !DB.Migrator().HasColumn(&models.User{}, "role_id") {
+	return backfillUserRoleIDsWithDB(DB)
+}
+
+func backfillUserRoleIDsWithDB(db *gorm.DB) error {
+	if !db.Migrator().HasColumn(&models.User{}, "role_id") {
 		return nil
 	}
 
-	// 加载所有角色到 map[name]ID
 	var roles []models.Role
-	if err := DB.Find(&roles).Error; err != nil {
-		return fmt.Errorf("加载角色列表失败: %w", err)
+	if err := db.Find(&roles).Error; err != nil {
+		return fmt.Errorf("load roles for role_id backfill: %w", err)
 	}
 	roleMap := map[string]uint{}
 	for _, r := range roles {
 		roleMap[r.Name] = r.ID
 	}
 
-	// 旧角色名 → 新角色名
 	legacyMap := map[string]string{
 		"admin":    "system_admin",
 		"user":     "viewer",
@@ -156,10 +263,9 @@ func backfillUserRoleIDs() error {
 		"engineer": "offline_programmer",
 	}
 
-	// 查询所有 role_id 为空的用户
 	var users []models.User
-	if err := DB.Where("role_id IS NULL").Find(&users).Error; err != nil {
-		return fmt.Errorf("查询待回填用户失败: %w", err)
+	if err := db.Where("role_id IS NULL").Find(&users).Error; err != nil {
+		return fmt.Errorf("query users needing role_id backfill: %w", err)
 	}
 
 	for _, u := range users {
@@ -169,18 +275,24 @@ func backfillUserRoleIDs() error {
 		}
 		roleID, ok := roleMap[roleName]
 		if !ok {
-			continue // 未知角色，跳过
+			continue
 		}
-		DB.Model(&models.User{}).Where("id = ?", u.ID).Update("role_id", roleID)
+		if err := db.Model(&models.User{}).Where("id = ?", u.ID).Update("role_id", roleID).Error; err != nil {
+			return err
+		}
 	}
 
 	if len(users) > 0 {
-		slog.Info("已回填用户的 role_id", "count", len(users))
+		slog.Info("backfilled user role_id", "count", len(users))
 	}
 	return nil
 }
 
 func ValidateSchema() error {
+	return ValidateSchemaWithDB(DB)
+}
+
+func ValidateSchemaWithDB(db *gorm.DB) error {
 	checks := []struct {
 		table  any
 		name   string
@@ -199,135 +311,211 @@ func ValidateSchema() error {
 	}
 
 	for _, check := range checks {
-		if !DB.Migrator().HasTable(check.table) {
+		if !db.Migrator().HasTable(check.table) {
 			return fmt.Errorf("schema validation failed: table %s is missing", check.name)
 		}
-		if !DB.Migrator().HasColumn(check.table, check.column) {
+		if !db.Migrator().HasColumn(check.table, check.column) {
 			return fmt.Errorf("schema validation failed: table %s missing column %s", check.name, check.column)
 		}
 	}
 
-	if !DB.Migrator().HasIndex(&models.ProductionLineCustomField{}, "idx_production_line_custom_fields_line_name") {
+	if !db.Migrator().HasIndex(&models.ProductionLineCustomField{}, "idx_production_line_custom_fields_line_name") {
 		return fmt.Errorf("schema validation failed: table production_line_custom_fields missing index idx_production_line_custom_fields_line_name")
 	}
 
-	if !DB.Migrator().HasIndex(&models.ProgramCustomFieldValue{}, "idx_program_custom_field_values_program_field") {
+	if !db.Migrator().HasIndex(&models.ProgramCustomFieldValue{}, "idx_program_custom_field_values_program_field") {
 		return fmt.Errorf("schema validation failed: table program_custom_field_values missing index idx_program_custom_field_values_program_field")
 	}
 
-	if !DB.Migrator().HasIndex(&models.PermissionRule{}, "idx_permission_rule_scope") {
+	if !db.Migrator().HasIndex(&models.PermissionRule{}, "idx_permission_rule_scope") {
 		return fmt.Errorf("schema validation failed: table permission_rules missing index idx_permission_rule_scope")
 	}
 
+	if err := validateCriticalColumnDefinitions(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateCriticalColumnDefinitions(db *gorm.DB) error {
+	notNull := false
+	checks := []struct {
+		table          any
+		tableName      string
+		column         string
+		expectNullable *bool
+	}{
+		{&models.User{}, "users", "employee_id", nil},
+		{&models.Role{}, "roles", "name", &notNull},
+		{&models.Permission{}, "permissions", "code", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "subject_type", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "subject_id", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "subject_key", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "resource_type", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "resource_id", &notNull},
+		{&models.PermissionRule{}, "permission_rules", "action", &notNull},
+		{&models.Program{}, "programs", "production_line_id", &notNull},
+		{&models.ProductionLineCustomField{}, "production_line_custom_fields", "production_line_id", &notNull},
+		{&models.ProgramCustomFieldValue{}, "program_custom_field_values", "program_id", &notNull},
+		{&models.ProgramCustomFieldValue{}, "program_custom_field_values", "production_line_custom_field_id", &notNull},
+	}
+
+	for _, check := range checks {
+		types, err := db.Migrator().ColumnTypes(check.table)
+		if err != nil {
+			return fmt.Errorf("schema validation failed: inspect table %s: %w", check.tableName, err)
+		}
+		found := false
+		for _, columnType := range types {
+			if !strings.EqualFold(columnType.Name(), check.column) {
+				continue
+			}
+			found = true
+			nullable, ok := columnType.Nullable()
+			if check.expectNullable != nil && ok && nullable != *check.expectNullable {
+				return fmt.Errorf("schema validation failed: table %s column %s nullable=%v, want %v; run an explicit migration", check.tableName, check.column, nullable, *check.expectNullable)
+			}
+			break
+		}
+		if !found {
+			return fmt.Errorf("schema validation failed: table %s missing column %s", check.tableName, check.column)
+		}
+	}
 	return nil
 }
 
 func AutoMigrate() error {
-	if err := ensureTables(); err != nil {
-		return err
-	}
+	return runWithMigrationLock(func(db *gorm.DB) error {
+		if err := ensureTablesWithDB(db); err != nil {
+			return err
+		}
+		if err := recordMigrationStep(db, migrationStepSchemaBootstrap); err != nil {
+			return err
+		}
 
-	if err := backfillUserRoleIDs(); err != nil {
-		return err
-	}
+		if err := SeedBaseDataWithDB(db, config.AppConfig); err != nil {
+			return err
+		}
+		if err := recordMigrationStep(db, migrationStepBaseSeed); err != nil {
+			return err
+		}
 
-	if err := migrateLegacyPermissionRules(); err != nil {
-		return err
-	}
+		if err := backfillUserRoleIDsWithDB(db); err != nil {
+			return err
+		}
 
-	return ValidateSchema()
+		backfilled, err := migrationStepRecorded(db, migrationStepPermissionBackfill)
+		if err != nil {
+			return err
+		}
+		if !backfilled {
+			if err := migrateLegacyPermissionRulesWithDB(db); err != nil {
+				return err
+			}
+			if err := recordMigrationStep(db, migrationStepPermissionBackfill); err != nil {
+				return err
+			}
+		}
+
+		return ValidateSchemaWithDB(db)
+	})
 }
 
 func migrateLegacyPermissionRules() error {
-	if err := migrateUserPermissionRules(); err != nil {
-		return err
-	}
-	if err := migrateDepartmentPermissionRules(); err != nil {
-		return err
-	}
-	if err := migrateRoleLinePermissionRules(); err != nil {
-		return err
-	}
-	if err := migrateRoleDefaultPermissionRules(); err != nil {
-		return err
-	}
-	return migrateDepartmentDefaultPermissionRules()
+	return migrateLegacyPermissionRulesWithDB(DB)
 }
 
-func migrateUserPermissionRules() error {
-	if !DB.Migrator().HasTable(&models.UserPermission{}) {
+func migrateLegacyPermissionRulesWithDB(db *gorm.DB) error {
+	if err := migrateUserPermissionRules(db); err != nil {
+		return err
+	}
+	if err := migrateDepartmentPermissionRules(db); err != nil {
+		return err
+	}
+	if err := migrateRoleLinePermissionRules(db); err != nil {
+		return err
+	}
+	if err := migrateRoleDefaultPermissionRules(db); err != nil {
+		return err
+	}
+	return migrateDepartmentDefaultPermissionRules(db)
+}
+
+func migrateUserPermissionRules(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.UserPermission{}) {
 		return nil
 	}
 	var rows []models.UserPermission
-	if err := DB.Find(&rows).Error; err != nil {
+	if err := db.Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := upsertPermissionRuleSet(models.PermissionSubjectUser, row.UserID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+		if err := upsertPermissionRuleSetWithDB(db, models.PermissionSubjectUser, row.UserID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func migrateDepartmentPermissionRules() error {
-	if !DB.Migrator().HasTable(&models.DepartmentPermission{}) {
+func migrateDepartmentPermissionRules(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.DepartmentPermission{}) {
 		return nil
 	}
 	var rows []models.DepartmentPermission
-	if err := DB.Find(&rows).Error; err != nil {
+	if err := db.Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := upsertPermissionRuleSet(models.PermissionSubjectDepartment, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+		if err := upsertPermissionRuleSetWithDB(db, models.PermissionSubjectDepartment, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func migrateRoleLinePermissionRules() error {
-	if !DB.Migrator().HasTable(&models.RoleLinePermission{}) {
+func migrateRoleLinePermissionRules(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.RoleLinePermission{}) {
 		return nil
 	}
 	var rows []models.RoleLinePermission
-	if err := DB.Find(&rows).Error; err != nil {
+	if err := db.Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := upsertPermissionRuleSet(models.PermissionSubjectRole, row.RoleID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+		if err := upsertPermissionRuleSetWithDB(db, models.PermissionSubjectRole, row.RoleID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func migrateRoleDefaultPermissionRules() error {
-	if !DB.Migrator().HasTable(&models.RoleDefaultPermission{}) {
+func migrateRoleDefaultPermissionRules(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.RoleDefaultPermission{}) {
 		return nil
 	}
 	var rows []models.RoleDefaultPermission
-	if err := DB.Find(&rows).Error; err != nil {
+	if err := db.Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := upsertPermissionRuleSet(models.PermissionSubjectRole, 0, row.Role, row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+		if err := upsertPermissionRuleSetWithDB(db, models.PermissionSubjectRole, 0, row.Role, row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func migrateDepartmentDefaultPermissionRules() error {
-	if !DB.Migrator().HasTable(&models.DepartmentDefaultPermission{}) {
+func migrateDepartmentDefaultPermissionRules(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.DepartmentDefaultPermission{}) {
 		return nil
 	}
 	var rows []models.DepartmentDefaultPermission
-	if err := DB.Find(&rows).Error; err != nil {
+	if err := db.Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := upsertPermissionRuleSet(models.PermissionSubjectDepartmentDefault, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
+		if err := upsertPermissionRuleSetWithDB(db, models.PermissionSubjectDepartmentDefault, row.DepartmentID, "", row.ProductionLineID, row.CanView, row.CanDownload, row.CanUpload, row.CanManage); err != nil {
 			return err
 		}
 	}
@@ -335,13 +523,17 @@ func migrateDepartmentDefaultPermissionRules() error {
 }
 
 func upsertPermissionRuleSet(subjectType string, subjectID uint, subjectKey string, lineID uint, canView, canDownload, canUpload, canManage bool) error {
+	return upsertPermissionRuleSetWithDB(DB, subjectType, subjectID, subjectKey, lineID, canView, canDownload, canUpload, canManage)
+}
+
+func upsertPermissionRuleSetWithDB(db *gorm.DB, subjectType string, subjectID uint, subjectKey string, lineID uint, canView, canDownload, canUpload, canManage bool) error {
 	rules := []models.PermissionRule{
 		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionView, canView),
 		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionDownload, canDownload),
 		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionUpload, canUpload),
 		buildPermissionRule(subjectType, subjectID, subjectKey, lineID, models.PermissionActionManage, canManage),
 	}
-	return DB.Clauses(clause.OnConflict{
+	return db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "subject_type"},
 			{Name: "subject_id"},

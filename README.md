@@ -123,6 +123,8 @@ GRANT ALL PRIVILEGES ON crane_system.* TO 'crane_user'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
+只需要创建空数据库和授权用户即可。应用迁移器会在启动或显式初始化时自动创建项目所需数据表、基础角色、权限定义、默认权限规则和管理员账号，不再依赖 `sql.md` 手工建表或手工插入种子数据。
+
 ### 4. 安装依赖
 
 ```bash
@@ -140,6 +142,10 @@ npm install
 ```
 
 ### 5. 初始化系统数据
+
+当 `AUTO_MIGRATE=true` 时，后端启动会自动执行受控迁移与基础数据补齐。迁移器会创建缺失表、补齐缺失列和索引、写入基础部门/角色/权限定义、创建 `admin001`，并通过 `schema_migrations` 记录已完成步骤。
+
+也可以显式执行初始化命令：
 
 ```bash
 make init-data
@@ -159,6 +165,8 @@ admin001
 ```
 
 密码来自 `.env` 中的 `DEFAULT_PASSWORD`。
+
+重复启动是幂等的：基础数据只补缺失项，旧权限表只在首次升级迁移时回填到 `PermissionRule`，完成后不会在普通启动中反复扫描或覆盖运行时权限规则。
 
 ### 6. 启动开发环境
 
@@ -241,6 +249,12 @@ Vite 开发服务器会把 `/api` 代理到 `http://localhost:8080`。
 | 拒绝 | 强制拒绝，阻断所有下层权限 |
 
 设置为"跟随"时，系统自动沿优先级链向下查找，直到找到明确的允许或拒绝，或回退到系统默认（deny）。
+
+### 权限存储与迁移
+
+`PermissionRule` 是当前唯一的运行时权限源和业务写入源。用户、部门、角色、角色默认和部门默认的生产线权限都会写入 `PermissionRule`，通过 `subject_type + subject_id + subject_key + resource_type + resource_id + action` 唯一定位一条规则。
+
+`UserPermission`、`DepartmentPermission`、`RoleLinePermission`、`RoleDefaultPermission`、`DepartmentDefaultPermission` 属于历史兼容表。它们会被保留用于老库首次升级迁移和历史排查，但业务接口不再把这些表作为写入源或运行时解析源。`legacy_permission_backfill` 只在 `schema_migrations` 中没有记录时执行一次，完成后重复启动不会再从旧表覆盖 `PermissionRule`。
 
 ## API 概览
 
@@ -361,11 +375,12 @@ projectManger/
 | `Role` | 角色定义，内置系统管理员、产线管理员、离线编程人员、现场操作员 |
 | `Permission` | 权限位定义（page 级功能权限） |
 | `RolePermission` | 角色与权限位的关联 |
-| `PermissionRule` | 统一权限规则，支持用户/部门/角色/部门默认四种主体类型 |
-| `UserPermission` | 用户对生产线的显式权限覆盖（遗留，已迁移至 PermissionRule） |
-| `DepartmentPermission` | 部门对生产线的显式权限覆盖（遗留，已迁移至 PermissionRule） |
-| `RoleDefaultPermission` | 角色默认权限（遗留，已迁移至 PermissionRule） |
-| `DepartmentDefaultPermission` | 部门默认权限（遗留，已迁移至 PermissionRule） |
+| `PermissionRule` | 统一权限规则，当前唯一运行时权限源和业务写入源 |
+| `UserPermission` | 用户生产线权限旧表，仅用于老库首次迁移和兼容 DTO |
+| `DepartmentPermission` | 部门生产线权限旧表，仅用于老库首次迁移和兼容 DTO |
+| `RoleLinePermission` | 角色生产线权限旧表，仅用于老库首次迁移和兼容 DTO |
+| `RoleDefaultPermission` | 角色默认权限旧表，仅用于老库首次迁移 |
+| `DepartmentDefaultPermission` | 部门默认权限旧表，仅用于老库首次迁移 |
 | `Process` | 工序 |
 | `ProductionLine` | 生产线 |
 | `ProductionLineCustomField` | 生产线自定义字段模板 |
@@ -381,9 +396,9 @@ projectManger/
 
 - 后端接口统一挂载在 `/api` 下。
 - 前端业务请求统一通过 `frontend/src/services/api.ts` 发起。
-- 权限规则统一存储在 `PermissionRule` 表，按 `subject_type + subject_id + subject_key + resource_type + resource_id + action` 唯一约束。
+- 权限规则统一存储在 `PermissionRule` 表，按 `subject_type + subject_id + subject_key + resource_type + resource_id + action` 唯一约束；新增业务不得写入旧权限表。
 - 权限矩阵保存时只提交脏行，设置为"跟随"时删除规则记录，避免把继承结果固化为显式覆盖。
-- 生产环境建议关闭 `AUTO_MIGRATE`，改用受控迁移流程。
+- 迁移器可以从空 MySQL 库初始化项目所需表和基础数据；生产环境若关闭 `AUTO_MIGRATE`，需在发布流程中显式执行同一套初始化/迁移入口。
 - `uploads/`、`backups/`、`.perf-logs/` 等运行或测量产物不应提交到版本库。
 
 ## 测试与质量检查
